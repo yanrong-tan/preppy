@@ -1,0 +1,1507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Preppy — Meal Planner</title>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    body { margin: 0; padding: 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+    const { useState, useMemo, useCallback, useEffect } = React;
+
+    // ── Pure canvas chart components (no dependencies) ──────────────────────
+    function LineChartCanvas({ data, dataKey, color, target, unit, height=260 }) {
+      const ref = React.useRef();
+      React.useEffect(() => {
+        if (!data || data.length === 0) return;
+        const canvas = ref.current;
+        const dpr = window.devicePixelRatio || 1;
+        const W = canvas.offsetWidth, H = height;
+        canvas.width = W * dpr; canvas.height = H * dpr;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+        const pl=48, pr=16, pt=16, pb=40;
+        const vals = data.map(d => d[dataKey] || 0);
+        const maxV = Math.max(...vals, target || 0, 1);
+        const minV = 0;
+        const xStep = (W - pl - pr) / Math.max(data.length - 1, 1);
+        const yScale = v => pt + (H - pt - pb) * (1 - (v - minV) / (maxV - minV));
+        const xPos = i => pl + i * xStep;
+        // Grid
+        ctx.strokeStyle = '#e8d5be'; ctx.lineWidth = 1;
+        [0, 0.25, 0.5, 0.75, 1].forEach(f => {
+          const y = pt + (H - pt - pb) * f;
+          ctx.beginPath(); ctx.moveTo(pl, y); ctx.lineTo(W - pr, y); ctx.stroke();
+          ctx.fillStyle = '#8c6f5a'; ctx.font = '10px Lato,sans-serif'; ctx.textAlign = 'right';
+          ctx.fillText(Math.round(maxV * (1 - f)), pl - 4, y + 3);
+        });
+        // X labels
+        ctx.fillStyle = '#8c6f5a'; ctx.font = '10px Lato,sans-serif'; ctx.textAlign = 'center';
+        data.forEach((d, i) => {
+          if (data.length <= 8 || i % Math.ceil(data.length / 6) === 0)
+            ctx.fillText(d.label, xPos(i), H - pb + 14);
+        });
+        // Target line
+        if (target > 0) {
+          ctx.strokeStyle = '#c4a882'; ctx.lineWidth = 1.5;
+          ctx.setLineDash([5, 5]);
+          const ty = yScale(target);
+          ctx.beginPath(); ctx.moveTo(pl, ty); ctx.lineTo(W - pr, ty); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#8c6f5a'; ctx.font = '9px Lato,sans-serif'; ctx.textAlign = 'right';
+          ctx.fillText('Target', W - pr - 2, ty - 3);
+        }
+        // Line
+        ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.setLineDash([]);
+        ctx.beginPath();
+        vals.forEach((v, i) => {
+          if (i === 0) ctx.moveTo(xPos(i), yScale(v));
+          else ctx.lineTo(xPos(i), yScale(v));
+        });
+        ctx.stroke();
+        // Dots
+        vals.forEach((v, i) => {
+          ctx.beginPath();
+          ctx.arc(xPos(i), yScale(v), data[i].isCurrent ? 6 : 4, 0, Math.PI * 2);
+          ctx.fillStyle = color; ctx.fill();
+          ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
+        });
+      }, [data, dataKey, color, target, height]);
+      return React.createElement('canvas', { ref, style: { width: '100%', height, display: 'block' } });
+    }
+
+    function BarChartCanvas({ data, height=240 }) {
+      const ref = React.useRef();
+      React.useEffect(() => {
+        if (!data || data.length === 0) return;
+        const canvas = ref.current;
+        const dpr = window.devicePixelRatio || 1;
+        const W = canvas.offsetWidth, H = height;
+        canvas.width = W * dpr; canvas.height = H * dpr;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+        const pl=40, pr=16, pt=16, pb=40;
+        const vals = data.map(d => d.meals || 0);
+        const maxV = Math.max(...vals, 1);
+        const barW = Math.max(8, ((W - pl - pr) / data.length) * 0.6);
+        const xStep = (W - pl - pr) / Math.max(data.length, 1);
+        const yScale = v => pt + (H - pt - pb) * (1 - v / maxV);
+        // Grid
+        ctx.strokeStyle = '#e8d5be'; ctx.lineWidth = 1;
+        [0, 0.25, 0.5, 0.75, 1].forEach(f => {
+          const y = pt + (H - pt - pb) * f;
+          ctx.beginPath(); ctx.moveTo(pl, y); ctx.lineTo(W - pr, y); ctx.stroke();
+          ctx.fillStyle = '#8c6f5a'; ctx.font = '10px Lato,sans-serif'; ctx.textAlign = 'right';
+          ctx.fillText((maxV * (1 - f)).toFixed(1), pl - 4, y + 3);
+        });
+        // Bars
+        data.forEach((d, i) => {
+          const x = pl + i * xStep + xStep / 2 - barW / 2;
+          const y = yScale(d.meals || 0);
+          const barH = H - pb - y;
+          ctx.fillStyle = d.isCurrent ? '#c4622d' : '#f5c5a3';
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(x, y, barW, barH, 4) : ctx.rect(x, y, barW, barH);
+          ctx.fill();
+          // X label
+          ctx.fillStyle = '#8c6f5a'; ctx.font = '10px Lato,sans-serif'; ctx.textAlign = 'center';
+          if (data.length <= 8 || i % Math.ceil(data.length / 6) === 0)
+            ctx.fillText(d.label, x + barW / 2, H - pb + 14);
+        });
+      }, [data, height]);
+      return React.createElement('canvas', { ref, style: { width: '100%', height, display: 'block' } });
+    }
+
+
+
+const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const MEAL_TYPES = ["Breakfast","Lunch","Dinner","Snack"];
+const CUISINES = ["Italian","Japanese","Mexican","Indian","Mediterranean","Thai","American","Chinese","Middle Eastern","Korean"];
+const DIFFICULTIES = ["Easy","Medium","Hard"];
+
+// ── Nutrition DB ────────────────────────────────────────────────────────────
+const NUTRITION_DB = {
+  "oat":{cal:389,pro:17,fat:7,fib:10,per:100},"rice":{cal:130,pro:2.7,fat:0.3,fib:0.4,per:100},
+  "bread":{cal:265,pro:9,fat:3.2,fib:2.7,per:100},"pasta":{cal:158,pro:6,fat:0.9,fib:1.8,per:100},
+  "quinoa":{cal:120,pro:4.4,fat:1.9,fib:2.8,per:100},"flour":{cal:364,pro:10,fat:1,fib:2.7,per:100},
+  "chicken":{cal:165,pro:31,fat:3.6,fib:0,per:100},"salmon":{cal:208,pro:20,fat:13,fib:0,per:100},
+  "tuna":{cal:132,pro:28,fat:1.3,fib:0,per:100},"beef":{cal:250,pro:26,fat:15,fib:0,per:100},
+  "pork":{cal:242,pro:27,fat:14,fib:0,per:100},"shrimp":{cal:99,pro:24,fat:0.3,fib:0,per:100},
+  "tofu":{cal:76,pro:8,fat:4.8,fib:0.3,per:100},"egg":{cal:78,pro:6,fat:5,fib:0,per:1},
+  "bacon":{cal:541,pro:37,fat:42,fib:0,per:100},"milk":{cal:42,pro:3.4,fat:1,fib:0,per:100},
+  "cheese":{cal:402,pro:25,fat:33,fib:0,per:100},"feta":{cal:264,pro:14,fat:21,fib:0,per:100},
+  "yogurt":{cal:59,pro:3.5,fat:0.4,fib:0,per:100},"butter":{cal:717,pro:0.9,fat:81,fib:0,per:100},
+  "chickpea":{cal:164,pro:8.9,fat:2.6,fib:7.6,per:100},"lentil":{cal:116,pro:9,fat:0.4,fib:7.9,per:100},
+  "bean":{cal:127,pro:8.7,fat:0.5,fib:6.4,per:100},"edamame":{cal:122,pro:11,fat:5.2,fib:5.2,per:100},
+  "tomato":{cal:18,pro:0.9,fat:0.2,fib:1.2,per:100},"onion":{cal:40,pro:1.1,fat:0.1,fib:1.7,per:100},
+  "garlic":{cal:149,pro:6.4,fat:0.5,fib:2.1,per:100},"spinach":{cal:23,pro:2.9,fat:0.4,fib:2.2,per:100},
+  "broccoli":{cal:34,pro:2.8,fat:0.4,fib:2.6,per:100},"carrot":{cal:41,pro:0.9,fat:0.2,fib:2.8,per:100},
+  "pepper":{cal:31,pro:1,fat:0.3,fib:2.1,per:100},"mushroom":{cal:22,pro:3.1,fat:0.3,fib:1,per:100},
+  "cucumber":{cal:15,pro:0.7,fat:0.1,fib:0.5,per:100},"avocado":{cal:160,pro:2,fat:15,fib:7,per:100},
+  "potato":{cal:77,pro:2,fat:0.1,fib:2.2,per:100},"kale":{cal:49,pro:4.3,fat:0.9,fib:3.6,per:100},
+  "zucchini":{cal:17,pro:1.2,fat:0.3,fib:1.1,per:100},"corn":{cal:86,pro:3.2,fat:1.2,fib:2,per:100},
+  "banana":{cal:89,pro:1.1,fat:0.3,fib:2.6,per:100},"apple":{cal:52,pro:0.3,fat:0.2,fib:2.4,per:100},
+  "berry":{cal:57,pro:0.7,fat:0.3,fib:2,per:100},"lemon":{cal:29,pro:1.1,fat:0.3,fib:2.8,per:100},
+  "mango":{cal:60,pro:0.8,fat:0.4,fib:1.6,per:100},"olive oil":{cal:884,pro:0,fat:100,fib:0,per:100},
+  "oil":{cal:884,pro:0,fat:100,fib:0,per:100},"coconut":{cal:354,pro:3.3,fat:33,fib:9,per:100},
+  "almond":{cal:579,pro:21,fat:50,fib:12.5,per:100},"sesame":{cal:573,pro:17,fat:50,fib:11.8,per:100},
+  "tahini":{cal:595,pro:17,fat:54,fib:9.3,per:100},"honey":{cal:304,pro:0.3,fat:0,fib:0.2,per:100},
+  "soy sauce":{cal:53,pro:8.1,fat:0.6,fib:0.8,per:100},"miso":{cal:198,pro:12,fat:6,fib:5.4,per:100},
+  "chia":{cal:486,pro:17,fat:31,fib:34,per:100},"flax":{cal:534,pro:18,fat:42,fib:27,per:100},
+};
+
+const UNIT_TO_G = {g:1,kg:1000,ml:1,l:1000,tbsp:15,tsp:5,cup:240,oz:28.35,lb:453.6,slice:30,whole:100,piece:100,clove:5,"":100};
+
+function estimateNutrition(ingredients) {
+  let cal=0,pro=0,fat=0,fib=0;
+  ingredients.forEach(ing => {
+    if (!ing.item.trim()) return;
+    const name=ing.item.toLowerCase(), qty=parseFloat(ing.qty)||0;
+    const unitG=UNIT_TO_G[ing.unit?.toLowerCase()]||100, grams=qty*unitG;
+    const match=Object.entries(NUTRITION_DB).find(([k])=>name.includes(k));
+    if (match) { const [,v]=match,f=grams/v.per; cal+=v.cal*f;pro+=v.pro*f;fat+=v.fat*f;fib+=v.fib*f; }
+  });
+  return {calories:Math.round(cal),protein:Math.round(pro),fats:Math.round(fat),fibre:Math.round(fib)};
+}
+
+// ── Craving keyword map ─────────────────────────────────────────────────────
+// Each entry: { macro, direction, thresholdPct }
+// thresholdPct: recipe macro as % of user's daily target to qualify
+const CRAVING_KEYWORDS = [
+  {words:["high protein","high-protein","protein","lean","muscle"],macro:"protein",dir:"high",pct:0.30},
+  {words:["low protein"],macro:"protein",dir:"low",pct:0.15},
+  {words:["low calorie","low-calorie","light","diet","low cal"],macro:"calories",dir:"low",pct:0.25},
+  {words:["high calorie","high-calorie","filling","hearty","bulk"],macro:"calories",dir:"high",pct:0.40},
+  {words:["low fat","low-fat"],macro:"fats",dir:"low",pct:0.15},
+  {words:["high fat","high-fat","keto","fatty"],macro:"fats",dir:"high",pct:0.35},
+  {words:["high fibre","high-fibre","high fiber","high-fiber","fibre","fiber","gut health"],macro:"fibre",dir:"high",pct:0.30},
+  {words:["low fibre","low-fiber"],macro:"fibre",dir:"low",pct:0.10},
+];
+
+function smartCravingSearch(query, recipes, targetsNum) {
+  const q = query.toLowerCase().trim();
+  if (!q) return null;
+
+  // Check if query matches any nutrition keyword
+  let macroRule = null;
+  for (const rule of CRAVING_KEYWORDS) {
+    if (rule.words.some(w => q.includes(w))) { macroRule = rule; break; }
+  }
+
+  let results;
+  if (macroRule) {
+    const { macro, dir, pct } = macroRule;
+    const macroKey = macro === "calories" ? "calories" : macro === "protein" ? "protein" : macro === "fats" ? "fats" : "fibre";
+    const targetVal = targetsNum[macroKey] || 1;
+    const threshold = targetVal * pct;
+
+    if (dir === "high") {
+      results = recipes
+        .filter(r => r[macroKey] >= threshold)
+        .sort((a, b) => b[macroKey] - a[macroKey]);
+    } else {
+      results = recipes
+        .filter(r => r[macroKey] <= threshold)
+        .sort((a, b) => a[macroKey] - b[macroKey]);
+    }
+    return { results, macroRule, matchType: "nutrition" };
+  }
+
+  // Fall back to text match on name / cuisine / difficulty / tags
+  results = recipes.filter(r =>
+    r.name.toLowerCase().includes(q) ||
+    r.cuisine.toLowerCase().includes(q) ||
+    r.difficulty.toLowerCase().includes(q) ||
+    (r.tags||[]).some(t => t.includes(q))
+  );
+  return { results, macroRule: null, matchType: "text" };
+}
+
+// ── Date helpers ────────────────────────────────────────────────────────────
+function toDateStr(d) {
+  return d.toISOString().slice(0,10); // YYYY-MM-DD
+}
+function addDays(d, n) {
+  const r = new Date(d); r.setDate(r.getDate()+n); return r;
+}
+function startOfWeek(d) {
+  // Monday-based
+  const r = new Date(d);
+  const day = r.getDay(); // 0=Sun
+  const diff = day===0 ? -6 : 1-day;
+  r.setDate(r.getDate()+diff);
+  r.setHours(0,0,0,0);
+  return r;
+}
+
+// For a given date, return "Mon DD MMM" label
+function fmtDate(d) {
+  return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short"});
+}
+
+// No placeholder history — Insights builds from real planner data only
+const genId = () => Date.now()+Math.random();
+const EMPTY_RECIPE = {name:"",cuisine:"Italian",difficulty:"Easy",calories:"",protein:"",fats:"",fibre:"",tags:[],tagInput:"",ingredients:[{item:"",qty:"",unit:"g"}],steps:[""]};
+
+
+// ── localStorage persistence (per-user namespaced) ──────────────────────────
+const LS_ACTIVE_USER = "preppy_active_user";
+const LS_ALL_USERS   = "preppy_users"; // list of usernames
+
+function lsRaw(key, fallback) {
+  try { const v=localStorage.getItem(key); return v!==null?JSON.parse(v):fallback; } catch { return fallback; }
+}
+function lsRawSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+}
+// User-scoped keys
+function userKey(username, suffix) { return `preppy__${username}__${suffix}`; }
+function lsGet(username, suffix, fallback) {
+  return lsRaw(userKey(username, suffix), fallback);
+}
+function lsSet(username, suffix, val) {
+  lsRawSet(userKey(username, suffix), val);
+}
+function getUsers() { return lsRaw(LS_ALL_USERS, []); }
+function addUser(name) {
+  const users = getUsers();
+  if (!users.includes(name)) lsRawSet(LS_ALL_USERS, [...users, name]);
+}
+function deleteUserData(name) {
+  ["recipes","planner","targets","checked","pin"].forEach(s => {
+    try { localStorage.removeItem(userKey(name, s)); } catch {}
+  });
+  const users = getUsers().filter(u => u !== name);
+  lsRawSet(LS_ALL_USERS, users);
+}
+function getUserPin(name) { return lsRaw(userKey(name,"pin"), null); }
+function setUserPin(name, pin) { lsRawSet(userKey(name,"pin"), pin||null); }
+function hasPin(name) { const p=getUserPin(name); return p!==null && p!==""; }
+// ── UserGate — shown before the main app ────────────────────────────────────
+function UserGate({ onEnter }) {
+  const [users, setUsers] = useState(()=>getUsers());
+  const [mode, setMode] = useState("pick"); // "pick" | "new" | "pin"
+  const [nameInput, setNameInput] = useState("");
+  const [pinSetInput, setPinSetInput] = useState("");   // PIN chosen during signup
+  const [pinEntry, setPinEntry] = useState("");          // PIN entered on login
+  const [pinTarget, setPinTarget] = useState(null);      // username awaiting PIN
+  const [pinError, setPinError] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const S = { // shared inline styles
+    card:   {background:"#fffaf4",border:"1.5px solid #e8d5be",borderRadius:20,padding:"44px 40px",width:"100%",maxWidth:440,boxShadow:"0 4px 32px rgba(100,60,20,.10)"},
+    input:  {width:"100%",padding:"12px 16px",border:"1.5px solid #e8d5be",borderRadius:12,background:"#fdf6ee",fontFamily:"'Lato',sans-serif",fontSize:".95rem",color:"#3d2c1e",outline:"none",marginBottom:12,boxSizing:"border-box"},
+    btnPri: (active)=>({width:"100%",padding:"12px",background:active?"#c4622d":"#e8d5be",border:"none",borderRadius:12,fontFamily:"'Lato',sans-serif",fontSize:".9rem",fontWeight:700,color:"white",cursor:active?"pointer":"default",transition:"all .2s",letterSpacing:".03em"}),
+    label:  {fontSize:".82rem",fontWeight:700,color:"#8c6f5a",textTransform:"uppercase",letterSpacing:".04em",marginBottom:12,display:"block"},
+  };
+
+  const enter = (name) => { lsRawSet(LS_ACTIVE_USER, name); addUser(name); onEnter(name); };
+
+  // Try to enter — prompt PIN if protected
+  const tryEnter = (name) => {
+    if (hasPin(name)) {
+      setPinTarget(name); setPinEntry(""); setPinError(false); setMode("pin");
+    } else {
+      enter(name);
+    }
+  };
+
+  const submitPin = () => {
+    if (pinEntry === getUserPin(pinTarget)) {
+      enter(pinTarget);
+    } else {
+      setPinError(true); setPinEntry("");
+    }
+  };
+
+  const handleNew = () => {
+    const n = nameInput.trim();
+    if (!n) return;
+    const pin = pinSetInput.trim();
+    if (pin && pin.length !== 4) return; // shouldn't happen — button disabled
+    if (pin) setUserPin(n, pin);
+    enter(n);
+  };
+
+  const confirmDeleteUser = (name, e) => { e.stopPropagation(); setDeleteTarget(name); };
+  const executeDeleteUser = () => {
+    deleteUserData(deleteTarget);
+    setUsers(getUsers());
+    setDeleteTarget(null);
+  };
+
+  const pinDots = (val) => [0,1,2,3].map(i => (
+    <div key={i} style={{width:14,height:14,borderRadius:"50%",background:i<val.length?"#c4622d":"#e8d5be",transition:"background .15s"}}/>
+  ));
+
+  return (
+    <div style={{minHeight:"100vh",background:"#fdf6ee",backgroundImage:"radial-gradient(ellipse at 20% 0%,rgba(196,98,45,.09) 0%,transparent 60%),radial-gradient(ellipse at 80% 100%,rgba(90,122,82,.07) 0%,transparent 60%)",display:"flex",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'Lato',sans-serif"}}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Lato:wght@300;400;700&display=swap');`}</style>
+      <div style={S.card}>
+        {/* Logo */}
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{fontFamily:"'Playfair Display',serif",fontSize:"2rem",color:"#c4622d",letterSpacing:"-.02em",marginBottom:6}}>Preppy</div>
+          <div style={{color:"#8c6f5a",fontSize:".9rem",fontStyle:"italic"}}>your personal meal planner</div>
+        </div>
+
+        {/* ── PICK mode ── */}
+        {mode==="pick"&&(
+          <>
+            {users.length>0 ? (
+              <>
+                <span style={S.label}>Who's cooking today?</span>
+                <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:24}}>
+                  {users.map(u=>(
+                    <div key={u} style={{display:"flex",alignItems:"center",gap:8}}>
+                      <button onClick={()=>tryEnter(u)} style={{flex:1,padding:"12px 16px",background:"#f5e6d0",border:"1.5px solid #e8d5be",borderRadius:12,fontFamily:"'Lato',sans-serif",fontSize:".95rem",fontWeight:700,color:"#3d2c1e",cursor:"pointer",textAlign:"left",transition:"all .15s",display:"flex",alignItems:"center",gap:8}}
+                        onMouseOver={e=>{e.currentTarget.style.background="#f7dece";e.currentTarget.style.borderColor="#c4622d";}}
+                        onMouseOut={e=>{e.currentTarget.style.background="#f5e6d0";e.currentTarget.style.borderColor="#e8d5be";}}>
+                        <span>👤 {u}</span>
+                        {hasPin(u)&&<span style={{fontSize:".65rem",background:"#e8d5be",color:"#8c6f5a",borderRadius:20,padding:"2px 7px",fontWeight:700,letterSpacing:".03em",marginLeft:"auto"}}>🔒 PIN</span>}
+                      </button>
+                      <button onClick={e=>confirmDeleteUser(u,e)} title="Remove profile" style={{padding:"10px 12px",background:"none",border:"1.5px solid #e8d5be",borderRadius:10,cursor:"pointer",color:"#8c6f5a",fontSize:".8rem",transition:"all .15s"}}
+                        onMouseOver={e=>{e.currentTarget.style.borderColor="#fca5a5";e.currentTarget.style.color="#991b1b";}}
+                        onMouseOut={e=>{e.currentTarget.style.borderColor="#e8d5be";e.currentTarget.style.color="#8c6f5a";}}>🗑</button>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={()=>{setMode("new");setNameInput("");setPinSetInput("");}} style={{width:"100%",padding:"11px",background:"transparent",border:"1.5px dashed #c4622d",borderRadius:12,fontFamily:"'Lato',sans-serif",fontSize:".87rem",fontWeight:700,color:"#c4622d",cursor:"pointer",letterSpacing:".03em",transition:"all .15s"}}
+                  onMouseOver={e=>e.currentTarget.style.background="#f7dece"}
+                  onMouseOut={e=>e.currentTarget.style.background="transparent"}>
+                  + New profile
+                </button>
+              </>
+            ) : (
+              <>
+                <p style={{fontSize:".9rem",color:"#8c6f5a",marginBottom:20,textAlign:"center"}}>Let's get started! What should we call you?</p>
+                <input type="text" placeholder="Enter your name..." value={nameInput} onChange={e=>setNameInput(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&nameInput.trim()&&(pinSetInput===""||pinSetInput.length===4)&&handleNew()}
+                  autoFocus style={S.input}/>
+                <div style={{marginBottom:6}}>
+                  <label style={{...S.label,marginBottom:4,textTransform:"none",fontSize:".82rem"}}>🔒 Set a 4-digit PIN <span style={{fontWeight:300,color:"#aaa"}}>(optional)</span></label>
+                  <input type="password" inputMode="numeric" maxLength={4} placeholder="Leave blank for no PIN"
+                    value={pinSetInput} onChange={e=>setPinSetInput(e.target.value.replace(/[^0-9]/g,"").slice(0,4))}
+                    onKeyDown={e=>e.key==="Enter"&&nameInput.trim()&&(pinSetInput===""||pinSetInput.length===4)&&handleNew()}
+                    style={S.input}/>
+                  {pinSetInput.length>0&&pinSetInput.length<4&&(
+                    <p style={{fontSize:".75rem",color:"#c4622d",marginTop:-8,marginBottom:8}}>PIN must be exactly 4 digits</p>
+                  )}
+                </div>
+                <button onClick={handleNew} disabled={!nameInput.trim()||(pinSetInput.length>0&&pinSetInput.length<4)} style={S.btnPri(!!nameInput.trim()&&(pinSetInput===""||pinSetInput.length===4))}>
+                  Let's go →
+                </button>
+              </>
+            )}
+          </>
+        )}
+
+        {/* ── NEW profile mode ── */}
+        {mode==="new"&&(
+          <>
+            <span style={S.label}>Create new profile</span>
+            <input type="text" placeholder="Your name..." value={nameInput} onChange={e=>setNameInput(e.target.value)}
+              autoFocus style={S.input}/>
+            <div style={{marginBottom:6}}>
+              <label style={{...S.label,marginBottom:4,textTransform:"none",fontSize:".82rem"}}>🔒 Set a 4-digit PIN <span style={{fontWeight:300,color:"#aaa"}}>(optional)</span></label>
+              <input type="password" inputMode="numeric" maxLength={4} placeholder="Leave blank for no PIN"
+                value={pinSetInput} onChange={e=>setPinSetInput(e.target.value.replace(/[^0-9]/g,"").slice(0,4))}
+                onKeyDown={e=>e.key==="Enter"&&nameInput.trim()&&(pinSetInput===""||pinSetInput.length===4)&&handleNew()}
+                style={S.input}/>
+              {pinSetInput.length>0&&pinSetInput.length<4&&(
+                <p style={{fontSize:".75rem",color:"#c4622d",marginTop:-8,marginBottom:8}}>PIN must be exactly 4 digits</p>
+              )}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{setMode("pick");setNameInput("");setPinSetInput("");}} style={{flex:1,padding:"11px",background:"transparent",border:"1.5px solid #e8d5be",borderRadius:12,fontFamily:"'Lato',sans-serif",fontSize:".87rem",fontWeight:700,color:"#8c6f5a",cursor:"pointer"}}>← Back</button>
+              <button onClick={handleNew} disabled={!nameInput.trim()||(pinSetInput.length>0&&pinSetInput.length<4)} style={{...S.btnPri(!!nameInput.trim()&&(pinSetInput===""||pinSetInput.length===4)),flex:2,width:"auto"}}>
+                Create profile →
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── PIN entry mode ── */}
+        {mode==="pin"&&(
+          <>
+            <div style={{textAlign:"center",marginBottom:24}}>
+              <div style={{fontSize:"1.6rem",marginBottom:8}}>🔒</div>
+              <p style={{fontFamily:"'Playfair Display',serif",fontSize:"1.1rem",color:"#3d2c1e",marginBottom:4}}>Welcome back, {pinTarget}!</p>
+              <p style={{fontSize:".85rem",color:"#8c6f5a"}}>Enter your PIN to continue</p>
+            </div>
+            <div style={{display:"flex",justifyContent:"center",gap:12,marginBottom:20}}>
+              {pinDots(pinEntry)}
+            </div>
+            {/* Number pad */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:16}}>
+              {[1,2,3,4,5,6,7,8,9].map(n=>(
+                <button key={n} onClick={()=>{if(pinEntry.length<4){const np=pinEntry+n;setPinEntry(np);setPinError(false);if(np.length===4)setTimeout(()=>{if(np===getUserPin(pinTarget)){enter(pinTarget);}else{setPinError(true);setPinEntry("");}},120);}}}
+                  style={{padding:"16px",background:"#f5e6d0",border:"1.5px solid #e8d5be",borderRadius:12,fontFamily:"'Lato',sans-serif",fontSize:"1.2rem",fontWeight:700,color:"#3d2c1e",cursor:"pointer",transition:"all .1s"}}
+                  onMouseOver={e=>{e.currentTarget.style.background="#f7dece";e.currentTarget.style.borderColor="#c4622d";}}
+                  onMouseOut={e=>{e.currentTarget.style.background="#f5e6d0";e.currentTarget.style.borderColor="#e8d5be";}}>
+                  {n}
+                </button>
+              ))}
+              <div/>{/* empty cell */}
+              <button onClick={()=>{if(pinEntry.length<4){const np=pinEntry+"0";setPinEntry(np);setPinError(false);if(np.length===4)setTimeout(()=>{if(np===getUserPin(pinTarget)){enter(pinTarget);}else{setPinError(true);setPinEntry("");}},120);}}}
+                style={{padding:"16px",background:"#f5e6d0",border:"1.5px solid #e8d5be",borderRadius:12,fontFamily:"'Lato',sans-serif",fontSize:"1.2rem",fontWeight:700,color:"#3d2c1e",cursor:"pointer",transition:"all .1s"}}
+                onMouseOver={e=>{e.currentTarget.style.background="#f7dece";e.currentTarget.style.borderColor="#c4622d";}}
+                onMouseOut={e=>{e.currentTarget.style.background="#f5e6d0";e.currentTarget.style.borderColor="#e8d5be";}}>0</button>
+              <button onClick={()=>{setPinEntry(p=>p.slice(0,-1));setPinError(false);}}
+                style={{padding:"16px",background:"none",border:"1.5px solid #e8d5be",borderRadius:12,fontFamily:"'Lato',sans-serif",fontSize:"1.1rem",color:"#8c6f5a",cursor:"pointer"}}>⌫</button>
+            </div>
+            {pinError&&<p style={{textAlign:"center",color:"#dc2626",fontSize:".85rem",marginBottom:12,fontWeight:700}}>Incorrect PIN. Try again.</p>}
+            <button onClick={()=>{setMode("pick");setPinEntry("");setPinError(false);setPinTarget(null);}}
+              style={{width:"100%",padding:"10px",background:"transparent",border:"none",fontFamily:"'Lato',sans-serif",fontSize:".82rem",color:"#8c6f5a",cursor:"pointer",textDecoration:"underline"}}>
+              ← Back to profiles
+            </button>
+          </>
+        )}
+
+        {/* Delete profile confirm */}
+        {deleteTarget&&(
+          <div style={{position:"fixed",inset:0,background:"rgba(61,44,30,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,padding:24}}>
+            <div style={{background:"#fffaf4",borderRadius:16,padding:32,maxWidth:380,width:"100%",textAlign:"center",border:"1.5px solid #e8d5be",boxShadow:"0 4px 24px rgba(100,60,20,.13)"}}>
+              <div style={{fontSize:"2rem",marginBottom:10}}>🗑️</div>
+              <div style={{fontFamily:"'Playfair Display',serif",fontSize:"1.1rem",marginBottom:8}}>Remove this profile?</div>
+              <p style={{fontSize:".88rem",color:"#8c6f5a",marginBottom:6}}><strong style={{color:"#3d2c1e"}}>{deleteTarget}</strong></p>
+              <p style={{fontSize:".82rem",color:"#991b1b",background:"#fee2e2",borderRadius:8,padding:"8px 12px",marginBottom:20}}>⚠️ All their recipes, planner data and goals will be permanently deleted.</p>
+              <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+                <button onClick={()=>setDeleteTarget(null)} style={{padding:"9px 20px",background:"transparent",border:"1.5px solid #e8d5be",borderRadius:10,fontFamily:"'Lato',sans-serif",fontSize:".85rem",fontWeight:700,color:"#8c6f5a",cursor:"pointer"}}>Cancel</button>
+                <button onClick={executeDeleteUser} style={{padding:"9px 20px",background:"#dc2626",border:"none",borderRadius:10,fontFamily:"'Lato',sans-serif",fontSize:".85rem",fontWeight:700,color:"white",cursor:"pointer"}}>Yes, remove it</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── RecipeForm component ────────────────────────────────────────────────────
+function RecipeForm({initial, onSave, onCancel, title}) {
+  const [form, setForm] = useState({...initial, tagInput:initial.tagInput||""});
+  const [estimating, setEstimating] = useState(false);
+  const [estimated, setEstimated] = useState(false);
+  const upd = (f,v) => setForm(x=>({...x,[f]:v}));
+
+  const addTag = () => {
+    const t=form.tagInput.trim().toLowerCase().replace(/\s+/g,"-");
+    if (t&&!form.tags.includes(t)) setForm(x=>({...x,tags:[...x.tags,t],tagInput:""}));
+    else setForm(x=>({...x,tagInput:""}));
+  };
+  const handleEstimate = () => {
+    setEstimating(true);
+    setTimeout(()=>{
+      const e=estimateNutrition(form.ingredients);
+      setForm(x=>({...x,calories:String(e.calories),protein:String(e.protein),fats:String(e.fats),fibre:String(e.fibre)}));
+      setEstimating(false); setEstimated(true);
+    },700);
+  };
+  const handleSave = () => {
+    if (!form.name.trim()) return;
+    onSave({...form,calories:Number(form.calories)||0,protein:Number(form.protein)||0,fats:Number(form.fats)||0,fibre:Number(form.fibre)||0,ingredients:form.ingredients.filter(i=>i.item.trim()),steps:form.steps.filter(s=>s.trim())});
+  };
+
+  return (
+    <div className="modal" style={{maxWidth:620}} onClick={e=>e.stopPropagation()}>
+      <button className="modal-close" onClick={onCancel}>✕</button>
+      <h2>{title}</h2>
+      <div className="form-row">
+        <label className="form-label">Recipe Name</label>
+        <input type="text" placeholder="e.g. Spicy Tuna Bowl" value={form.name} onChange={e=>upd("name",e.target.value)} />
+      </div>
+      <div className="form-grid form-row">
+        <div><label className="form-label">Cuisine</label>
+          <select value={form.cuisine} onChange={e=>upd("cuisine",e.target.value)}>{CUISINES.map(c=><option key={c}>{c}</option>)}</select></div>
+        <div><label className="form-label">Difficulty</label>
+          <select value={form.difficulty} onChange={e=>upd("difficulty",e.target.value)}>{DIFFICULTIES.map(d=><option key={d}>{d}</option>)}</select></div>
+      </div>
+      <div className="form-row">
+        <label className="form-label">Custom Tags <span style={{fontWeight:300,textTransform:"none",letterSpacing:0}}>(optional — press Enter or click Add)</span></label>
+        <div style={{display:"flex",gap:8}}>
+          <input type="text" placeholder="e.g. high-protein, meal-prep, vegan..." value={form.tagInput}
+            onChange={e=>upd("tagInput",e.target.value)} onKeyDown={e=>e.key==="Enter"&&(e.preventDefault(),addTag())} />
+          <button className="btn btn-ghost btn-sm" onClick={addTag} style={{whiteSpace:"nowrap"}}>Add</button>
+        </div>
+        {form.tags.length>0&&<div className="tag-pills">{form.tags.map(t=><span key={t} className="tag-pill">{t}<button onClick={()=>setForm(x=>({...x,tags:x.tags.filter(y=>y!==t)}))}>✕</button></span>)}</div>}
+      </div>
+      <div className="form-row">
+        <label className="form-label">Ingredients</label>
+        {form.ingredients.map((ing,i)=>(
+          <div key={i} className="ingredient-row">
+            <input type="text" placeholder="Ingredient" value={ing.item} onChange={e=>setForm(x=>{const a=[...x.ingredients];a[i]={...a[i],item:e.target.value};return{...x,ingredients:a};})} />
+            <input type="number" placeholder="Qty" value={ing.qty} onChange={e=>setForm(x=>{const a=[...x.ingredients];a[i]={...a[i],qty:e.target.value};return{...x,ingredients:a};})} />
+            <input type="text" placeholder="Unit" value={ing.unit} onChange={e=>setForm(x=>{const a=[...x.ingredients];a[i]={...a[i],unit:e.target.value};return{...x,ingredients:a};})} />
+            <button className="ingredient-remove" onClick={()=>setForm(x=>({...x,ingredients:x.ingredients.filter((_,j)=>j!==i)}))}>✕</button>
+          </div>
+        ))}
+        <button className="btn btn-ghost btn-sm" onClick={()=>setForm(x=>({...x,ingredients:[...x.ingredients,{item:"",qty:"",unit:"g"}]}))}>+ Add ingredient</button>
+      </div>
+      <div className="form-row">
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <label className="form-label" style={{marginBottom:0}}>Nutrition <span style={{fontWeight:300,textTransform:"none",letterSpacing:0}}>(editable)</span></label>
+          <button className="btn btn-ghost btn-sm" onClick={handleEstimate} disabled={estimating} style={{fontSize:"0.75rem"}}>{estimating?"⏳ Estimating...":"✨ Auto-estimate from ingredients"}</button>
+        </div>
+        {estimated&&<div className="nutri-estimate-banner">✅ Estimated from your ingredients — feel free to adjust below.</div>}
+        <div className="form-grid">
+          {[["calories","Calories (kcal)"],["protein","Protein (g)"],["fats","Fats (g)"],["fibre","Fibre (g)"]].map(([key,label])=>(
+            <div key={key}><label className="form-label" style={{fontSize:"0.7rem"}}>{label}</label>
+              <input type="number" placeholder="0" value={form[key]} onChange={e=>upd(key,e.target.value)} onFocus={e=>{if(e.target.value==="0")upd(key,"");}} /></div>
+          ))}
+        </div>
+      </div>
+      <div className="form-row">
+        <label className="form-label">Steps</label>
+        {form.steps.map((step,i)=>(
+          <div key={i} style={{display:"flex",gap:8,marginBottom:8}}>
+            <span className="step-num" style={{marginTop:10}}>{i+1}</span>
+            <textarea rows={2} style={{resize:"vertical"}} placeholder={`Step ${i+1}...`} value={step}
+              onChange={e=>setForm(x=>{const a=[...x.steps];a[i]=e.target.value;return{...x,steps:a};})} />
+          </div>
+        ))}
+        <button className="btn btn-ghost btn-sm" onClick={()=>setForm(x=>({...x,steps:[...x.steps,""]}))}>+ Add step</button>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}>
+        <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-primary" onClick={handleSave}>Save Recipe</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ────────────────────────────────────────────────────────────────
+function MealPrepPlanner({ username, onSwitchUser }) {
+  const today = useMemo(()=>{ const d=new Date(); d.setHours(0,0,0,0); return d; },[]);
+  const todayStr = toDateStr(today);
+  const todayDayName = DAYS[today.getDay()===0?6:today.getDay()-1]; // Mon=0 index
+
+  const [tab, setTab] = useState("planner");
+  const SAMPLE_RECIPES = [
+    {id:1,name:"Avocado Toast",cuisine:"American",difficulty:"Easy",favourite:true,tags:["breakfast","quick"],calories:320,protein:8,fats:18,fibre:7,ingredients:[{item:"Sourdough bread",qty:2,unit:"slices"},{item:"Avocado",qty:1,unit:"whole"},{item:"Lemon juice",qty:1,unit:"tbsp"},{item:"Chili flakes",qty:0.5,unit:"tsp"}],steps:["Toast the sourdough until golden.","Mash avocado with lemon juice, salt & pepper.","Spread onto toast and top with chili flakes."]},
+    {id:2,name:"Miso Salmon Bowl",cuisine:"Japanese",difficulty:"Medium",favourite:true,tags:["high-protein","bowl"],calories:520,protein:38,fats:14,fibre:4,ingredients:[{item:"Salmon fillet",qty:150,unit:"g"},{item:"White miso paste",qty:2,unit:"tbsp"},{item:"Brown rice",qty:80,unit:"g"},{item:"Edamame",qty:50,unit:"g"},{item:"Sesame oil",qty:1,unit:"tsp"}],steps:["Mix miso paste with sesame oil and coat salmon.","Bake at 200°C for 15 mins.","Cook rice and assemble bowl with edamame."]},
+    {id:3,name:"Chickpea Curry",cuisine:"Indian",difficulty:"Medium",favourite:false,tags:["vegan","high-fibre"],calories:420,protein:16,fats:12,fibre:11,ingredients:[{item:"Chickpeas",qty:400,unit:"g"},{item:"Coconut milk",qty:200,unit:"ml"},{item:"Tomatoes",qty:2,unit:"whole"},{item:"Curry powder",qty:2,unit:"tbsp"},{item:"Onion",qty:1,unit:"whole"}],steps:["Sauté onion until soft.","Add curry powder and cook 1 min.","Add chickpeas, tomatoes, coconut milk. Simmer 20 mins."]},
+    {id:4,name:"Greek Salad",cuisine:"Mediterranean",difficulty:"Easy",favourite:false,tags:["salad","no-cook"],calories:280,protein:9,fats:19,fibre:3,ingredients:[{item:"Cucumber",qty:1,unit:"whole"},{item:"Cherry tomatoes",qty:150,unit:"g"},{item:"Feta cheese",qty:80,unit:"g"},{item:"Kalamata olives",qty:50,unit:"g"},{item:"Olive oil",qty:2,unit:"tbsp"}],steps:["Chop cucumber and halve tomatoes.","Combine with olives and feta.","Drizzle with olive oil and season."]},
+    {id:5,name:"Overnight Oats",cuisine:"American",difficulty:"Easy",favourite:true,tags:["breakfast","meal-prep"],calories:380,protein:14,fats:9,fibre:8,ingredients:[{item:"Rolled oats",qty:80,unit:"g"},{item:"Almond milk",qty:200,unit:"ml"},{item:"Chia seeds",qty:1,unit:"tbsp"},{item:"Honey",qty:1,unit:"tbsp"},{item:"Berries",qty:100,unit:"g"}],steps:["Mix oats, almond milk, chia seeds and honey.","Refrigerate overnight.","Top with fresh berries before serving."]},
+  ];
+  const [recipes, setRecipes] = useState(()=>lsGet(username,"recipes",SAMPLE_RECIPES));
+
+  // Planner keyed by "YYYY-MM-DD__MealType" → array of recipe ids
+  // This lets us register nutrition to the actual date
+  const [planner, setPlanner] = useState(()=>lsGet(username,"planner",{}));
+  const [checkedItems, setCheckedItems] = useState(()=>lsGet(username,"checked",{}));
+  const [targets, setTargets] = useState(()=>lsGet(username,"targets",{calories:"2000",protein:"50",fats:"30",fibre:"20"}));
+  const [selectedGoalDay, setSelectedGoalDay] = useState(todayDayName);
+  const [cravingInput, setCravingInput] = useState("");
+  const [cravingResults, setCravingResults] = useState(null);
+  const [filterCuisine, setFilterCuisine] = useState("All");
+  const [filterDiff, setFilterDiff] = useState("All");
+  const [filterFav, setFilterFav] = useState(false);
+  const [scaleServings, setScaleServings] = useState(1);
+  const [chartMetric, setChartMetric] = useState("calories");
+  const [pickerOpen, setPickerOpen] = useState(null);
+  const [recipeDetailOpen, setRecipeDetailOpen] = useState(null);
+  const [addRecipeOpen, setAddRecipeOpen] = useState(false);
+  const [editRecipeTarget, setEditRecipeTarget] = useState(null);
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState(null); // recipe to confirm delete
+  const [viewWeekOffset, setViewWeekOffset] = useState(0); // 0=this week, 1=next, 2=+2, etc.
+  const [goalsWeekOffset, setGoalsWeekOffset] = useState(0);
+  const [tagManagerOpen, setTagManagerOpen] = useState(false);
+  const [pinModalOpen, setPinModalOpen] = useState(false);
+  const [pinModalStep, setPinModalStep] = useState("menu"); // "menu"|"set"|"change_old"|"change_new"|"remove_confirm"
+  const [pinModalInput, setPinModalInput] = useState("");
+  const [pinModalOldInput, setPinModalOldInput] = useState("");
+  const [pinModalError, setPinModalError] = useState("");
+  const [tagEditId, setTagEditId] = useState(null); // tag string being renamed
+  const [tagEditVal, setTagEditVal] = useState("");
+  const [tagNewVal, setTagNewVal] = useState("");
+
+  // Insights date range — default last 4 weeks
+  const defaultEnd = today;
+  const defaultStart = addDays(today, -27);
+  const [insightStart, setInsightStart] = useState(toDateStr(defaultStart));
+  const [insightEnd, setInsightEnd] = useState(toDateStr(defaultEnd));
+
+  const targetsNum = {calories:Number(targets.calories)||0,protein:Number(targets.protein)||0,fats:Number(targets.fats)||0,fibre:Number(targets.fibre)||0};
+  const getNutriColor = k=>({calories:"#c4622d",protein:"#5a7a52",fats:"#d4a017",fibre:"#7c6b9e"}[k]);
+
+  useEffect(()=>{ lsSet(username,"recipes",recipes); },[username,recipes]);
+  useEffect(()=>{ lsSet(username,"planner",planner); },[username,planner]);
+  useEffect(()=>{ lsSet(username,"targets",targets); },[username,targets]);
+  useEffect(()=>{ lsSet(username,"checked",checkedItems); },[username,checkedItems]);
+
+  // ── Planner helpers (date-keyed) ─────────────────────────────────────────
+  // For the weekly grid we still show Mon-Sun of the current week
+  const currentWeekMonday = useMemo(()=>startOfWeek(today),[today]);
+  const viewWeekMonday = useMemo(()=>addDays(currentWeekMonday, viewWeekOffset*7),[currentWeekMonday,viewWeekOffset]);
+
+  const getDateForDay = useCallback((dayName) => {
+    const idx = DAYS.indexOf(dayName);
+    return addDays(viewWeekMonday, idx);
+  },[viewWeekMonday]);
+
+  const getPlannerKey = useCallback((dayName, meal) => {
+    const d = getDateForDay(dayName);
+    return `${toDateStr(d)}__${meal}`;
+  },[getDateForDay]);
+
+  const getRecipesForCell = useCallback((dayName, meal) => {
+    const ids = planner[getPlannerKey(dayName,meal)]||[];
+    return ids.map(id=>recipes.find(r=>r.id===id)).filter(Boolean);
+  },[planner,getPlannerKey,recipes]);
+
+  const toggleRecipeInCell = (recipeId) => {
+    const key = getPlannerKey(pickerOpen.day,pickerOpen.meal);
+    setPlanner(p=>{const cur=p[key]||[];return{...p,[key]:cur.includes(recipeId)?cur.filter(id=>id!==recipeId):[...cur,recipeId]};});
+  };
+  const removeRecipeFromCell = (dayName,meal,recipeId) => {
+    const key = getPlannerKey(dayName,meal);
+    setPlanner(p=>{const u=(p[key]||[]).filter(id=>id!==recipeId);if(!u.length){const n={...p};delete n[key];return n;}return{...p,[key]:u};});
+  };
+
+  // Nutrition for a given day by dayName (this week)
+  const goalsWeekMonday = useMemo(()=>addDays(currentWeekMonday, goalsWeekOffset*7),[currentWeekMonday,goalsWeekOffset]);
+  const goalsWeekLabel = useMemo(()=>{
+    const end = addDays(goalsWeekMonday,6);
+    return `${fmtDate(goalsWeekMonday)} – ${fmtDate(end)}`;
+  },[goalsWeekMonday]);
+  const getGoalsDayKey = useCallback((dayName, meal)=>{
+    const idx = DAYS.indexOf(dayName);
+    return `${toDateStr(addDays(goalsWeekMonday,idx))}__${meal}`;
+  },[goalsWeekMonday]);
+
+  const getDayNutrition = useCallback((dayName)=>{
+    return MEAL_TYPES.reduce((acc,meal)=>{
+      (planner[getGoalsDayKey(dayName,meal)]||[]).forEach(id=>{
+        const r=recipes.find(x=>x.id===id);
+        if(r){acc.calories+=r.calories;acc.protein+=r.protein;acc.fats+=r.fats;acc.fibre+=r.fibre;}
+      });
+      return acc;
+    },{calories:0,protein:0,fats:0,fibre:0});
+  },[planner,getGoalsDayKey,recipes]);
+
+  // Shopping list from this week's planner
+  const shoppingList = useMemo(()=>{
+    const map={};
+    Object.values(planner).forEach(ids=>{
+      (ids||[]).forEach(id=>{
+        const r=recipes.find(x=>x.id===id);
+        if(r)r.ingredients.forEach(ing=>{const k=ing.item.toLowerCase();if(map[k])map[k].qty+=ing.qty;else map[k]={...ing};});
+      });
+    });
+    return Object.values(map);
+  },[planner,recipes]);
+
+  const toggleFav = id=>setRecipes(rs=>rs.map(r=>r.id===id?{...r,favourite:!r.favourite}:r));
+  const saveRecipe = data=>{setRecipes(rs=>[...rs,{...data,id:genId(),favourite:false}]);setAddRecipeOpen(false);};
+  const updateRecipe = data=>{setRecipes(rs=>rs.map(r=>r.id===data.id?data:r));setEditRecipeTarget(null);if(recipeDetailOpen?.id===data.id)setRecipeDetailOpen(data);};
+  const confirmDelete = (recipe,e)=>{if(e){e.stopPropagation();}setDeleteConfirmTarget(recipe);};
+  const executeDelete = ()=>{
+    if(!deleteConfirmTarget)return;
+    setRecipes(rs=>rs.filter(r=>r.id!==deleteConfirmTarget.id));
+    setDeleteConfirmTarget(null);
+    if(recipeDetailOpen?.id===deleteConfirmTarget.id)setRecipeDetailOpen(null);
+  };
+
+
+  // derive all unique custom tags across all recipes
+  const allTags = useMemo(()=>{
+    const s=new Set(); recipes.forEach(r=>(r.tags||[]).forEach(t=>s.add(t))); return [...s].sort();
+  },[recipes]);
+
+  const renameTag = (oldTag, newTag) => {
+    const n=newTag.trim().toLowerCase().replace(/\s+/g,"-");
+    if(!n||n===oldTag)return;
+    setRecipes(rs=>rs.map(r=>({...r,tags:(r.tags||[]).map(t=>t===oldTag?n:t)})));
+    setTagEditId(null); setTagEditVal("");
+  };
+  const deleteTag = (tag) => {
+    setRecipes(rs=>rs.map(r=>({...r,tags:(r.tags||[]).filter(t=>t!==tag)})));
+  };
+  const addGlobalTag = () => {
+    // Adding a global tag doesn't attach it to any recipe — it just makes it available
+    // Instead, we just reset the input; tags are created per-recipe in RecipeForm
+    setTagNewVal("");
+  };
+
+  // ── Smart craving search ─────────────────────────────────────────────────
+  const handleCravingSearch = () => {
+    const res = smartCravingSearch(cravingInput, recipes, targetsNum);
+    setCravingResults(res);
+  };
+
+  // ── Insights: combine history + current week entry ───────────────────────
+  // Current week entry uses actual planner data keyed to this week's dates
+  const currentWeekEntry = useMemo(()=>{
+    const total=DAYS.reduce((acc,day)=>{
+      const d=getDayNutrition(day);
+      acc.cal+=d.calories;acc.pro+=d.protein;acc.fat+=d.fats;acc.fib+=d.fibre;
+      acc.meals+=MEAL_TYPES.reduce((m,meal)=>m+((planner[getPlannerKey(day,meal)]||[]).length>0?1:0),0);
+      return acc;
+    },{cal:0,pro:0,fat:0,fib:0,meals:0});
+    const dw=DAYS.filter(d=>MEAL_TYPES.some(m=>(planner[getPlannerKey(d,m)]||[]).length>0)).length||1;
+    return {
+      weekStart:toDateStr(currentWeekMonday),
+      label:`This week (${fmtDate(currentWeekMonday)})`,
+      calories:Math.round(total.cal/dw),protein:Math.round(total.pro/dw),
+      fats:Math.round(total.fat/dw),fibre:Math.round(total.fib/dw),
+      meals:parseFloat((total.meals/7).toFixed(1)),
+      isCurrent:true,
+    };
+  },[planner,getDayNutrition,currentWeekMonday,getPlannerKey]);
+
+  // Chart data: only real planner weeks + current week
+  const allChartData = useMemo(()=>{
+    // Build one entry per past week that has planner data
+    const pastKeys = Object.keys(planner);
+    const weekMap = {};
+    pastKeys.forEach(key => {
+      const dateStr = key.split("__")[0];
+      const d = new Date(dateStr);
+      const mon = startOfWeek(d);
+      const monStr = toDateStr(mon);
+      if (monStr === toDateStr(currentWeekMonday)) return; // skip current week here
+      if (!weekMap[monStr]) weekMap[monStr] = {weekStart:monStr, label:fmtDate(mon), calories:0, protein:0, fats:0, fibre:0, meals:0, days:new Set()};
+      const meal = key.split("__")[1];
+      const ids = planner[key]||[];
+      ids.forEach(id=>{
+        const r=recipes.find(x=>x.id===id);
+        if(r){weekMap[monStr].calories+=r.calories;weekMap[monStr].protein+=r.protein;weekMap[monStr].fats+=r.fats;weekMap[monStr].fibre+=r.fibre;}
+      });
+      if(ids.length>0) weekMap[monStr].meals+=1;
+      weekMap[monStr].days.add(dateStr);
+    });
+    const pastWeeks = Object.values(weekMap).map(w=>{
+      const dCount=w.days.size||1;
+      return {...w, calories:Math.round(w.calories/dCount), protein:Math.round(w.protein/dCount), fats:Math.round(w.fats/dCount), fibre:Math.round(w.fibre/dCount), meals:parseFloat((w.meals/7).toFixed(1))};
+    }).sort((a,b)=>a.weekStart.localeCompare(b.weekStart));
+    return [...pastWeeks, currentWeekEntry];
+  },[planner, recipes, currentWeekEntry, currentWeekMonday]);
+
+  // Filter by selected date range
+  const filteredChartData = useMemo(()=>{
+    return allChartData.filter(w=>{
+      if (!insightStart && !insightEnd) return true;
+      const ws = w.weekStart;
+      if (insightStart && ws < insightStart) return false;
+      if (insightEnd && ws > insightEnd) return false;
+      return true;
+    });
+  },[allChartData,insightStart,insightEnd]);
+
+  const filteredRecipes = recipes.filter(r=>{
+    if(filterFav&&!r.favourite)return false;
+    if(filterCuisine!=="All"&&r.cuisine!==filterCuisine)return false;
+    if(filterDiff!=="All"&&r.difficulty!==filterDiff)return false;
+    return true;
+  });
+
+  // ── CSS ──────────────────────────────────────────────────────────────────
+  const css=`
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Lato:wght@300;400;700&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#fdf6ee;font-family:'Lato',sans-serif;color:#3d2c1e}
+    :root{--cream:#fdf6ee;--warm-bg:#f5e6d0;--card:#fffaf4;--border:#e8d5be;--accent:#c4622d;--accent-light:#f2956a;--accent-muted:#f7dece;--text:#3d2c1e;--text-muted:#8c6f5a;--green:#5a7a52;--green-light:#e8f0e6;--shadow:0 2px 12px rgba(100,60,20,.08);--shadow-md:0 4px 24px rgba(100,60,20,.13)}
+    .app{min-height:100vh;background:var(--cream);background-image:radial-gradient(ellipse at 20% 0%,rgba(196,98,45,.07) 0%,transparent 60%),radial-gradient(ellipse at 80% 100%,rgba(90,122,82,.06) 0%,transparent 60%)}
+    .header{background:var(--card);border-bottom:1.5px solid var(--border);padding:0 32px;position:sticky;top:0;z-index:100;box-shadow:0 2px 16px rgba(100,60,20,.07)}
+    .header-inner{max-width:1300px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;height:68px}
+    .logo{font-family:'Playfair Display',serif;font-size:1.5rem;color:var(--accent);letter-spacing:-.02em;display:flex;align-items:center;gap:10px}
+    .logo span{font-style:italic;color:var(--text-muted);font-size:1rem}
+    .nav{display:flex;gap:4px;flex-wrap:wrap}
+    .nav-btn{padding:7px 14px;border-radius:20px;border:none;background:transparent;color:var(--text-muted);font-family:'Lato',sans-serif;font-size:.82rem;font-weight:700;cursor:pointer;letter-spacing:.03em;text-transform:uppercase;transition:all .2s;white-space:nowrap}
+    .nav-btn:hover{background:var(--accent-muted);color:var(--accent)}
+    .nav-btn.active{background:var(--accent);color:white}
+    @media(max-width:640px){
+      .header-inner{flex-wrap:wrap;gap:8px;padding:10px 14px}
+      .logo{font-size:1.1rem!important}
+      .nav{width:100%;overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px;scrollbar-width:none}
+      .nav::-webkit-scrollbar{display:none}
+      .nav-btn{font-size:.75rem;padding:6px 10px}
+      .header-user{font-size:.75rem!important}
+      .planner-grid{grid-template-columns:repeat(3,1fr)!important;font-size:.78rem}
+      .targets-grid{grid-template-columns:repeat(2,1fr)!important}
+      .insight-summary{grid-template-columns:repeat(2,1fr)!important}
+      .recipe-grid{grid-template-columns:1fr!important}
+      .main{padding:16px 12px!important}
+    }
+    .main{max-width:1300px;margin:0 auto;padding:32px}
+    .section-title{font-family:'Playfair Display',serif;font-size:1.7rem;color:var(--text);margin-bottom:6px}
+    .section-sub{color:var(--text-muted);font-size:.9rem;margin-bottom:28px}
+    .today-badge{display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:white;border-radius:20px;padding:4px 12px;font-size:.75rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-bottom:20px}
+    .planner-grid-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:36px}.planner-grid{display:grid;grid-template-columns:90px repeat(7,minmax(100px,1fr));gap:6px;min-width:700px}
+    .planner-header-cell{background:var(--accent);color:white;border-radius:10px;padding:10px 6px;text-align:center;font-size:.78rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .planner-header-cell.corner{background:transparent}
+    .planner-header-cell.today-col{background:#a8501f;outline:2.5px solid #f2956a}
+    .meal-label{display:flex;align-items:center;justify-content:flex-end;padding-right:10px;font-size:.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em}
+    .planner-cell{background:var(--card);border:1.5px solid var(--border);border-radius:10px;min-height:72px;padding:7px;transition:all .18s;position:relative;overflow:hidden}
+    .planner-cell:hover{border-color:var(--accent-light);box-shadow:var(--shadow)}
+    .planner-cell.has-meal{background:#fff8f2;border-color:var(--accent-light)}
+    .planner-cell.today-cell{border-color:var(--accent-light);box-shadow:0 0 0 2px rgba(196,98,45,.2)}
+    .cell-meal-name{font-size:.72rem;font-weight:700;color:var(--accent);line-height:1.3;margin-bottom:3px}
+    .cell-meal-cal{font-size:.7rem;color:var(--text-muted)}
+    .cell-add{display:flex;align-items:center;justify-content:center;height:100%;color:var(--border);font-size:1.4rem;font-weight:300;transition:color .15s;cursor:pointer}
+    .planner-cell:hover .cell-add{color:var(--accent-light)}
+    .modal-overlay{position:fixed;inset:0;background:rgba(61,44,30,.35);backdrop-filter:blur(3px);z-index:200;display:flex;align-items:center;justify-content:center;padding:24px}
+    .modal{background:var(--card);border-radius:18px;padding:32px;width:100%;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow-md);border:1.5px solid var(--border)}
+    .modal h2{font-family:'Playfair Display',serif;font-size:1.3rem;margin-bottom:20px;color:var(--text)}
+    .modal-close{float:right;background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--text-muted);margin-top:-4px}
+    .recipes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:18px;margin-top:8px}
+    .recipe-card{background:var(--card);border:1.5px solid var(--border);border-radius:14px;padding:20px;cursor:pointer;transition:all .2s;position:relative;padding-bottom:44px}
+    .recipe-card:hover{box-shadow:var(--shadow-md);transform:translateY(-2px);border-color:var(--accent-light)}
+    .recipe-card-name{font-family:'Playfair Display',serif;font-size:1.1rem;color:var(--text);margin-bottom:8px}
+    .recipe-tags{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+    .tag{padding:3px 10px;border-radius:20px;font-size:.7rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
+    .tag-cuisine{background:var(--accent-muted);color:var(--accent)}
+    .tag-easy{background:var(--green-light);color:var(--green)}
+    .tag-medium{background:#fef3c7;color:#92400e}
+    .tag-hard{background:#fee2e2;color:#991b1b}
+    .tag-fav{background:#fce7f3;color:#9d174d}
+    .tag-custom{background:#ede9fe;color:#5b21b6}
+    .recipe-macros{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:10px}
+    .macro-chip{text-align:center;background:var(--warm-bg);border-radius:8px;padding:5px 3px}
+    .macro-chip-val{font-size:.75rem;font-weight:700;color:var(--accent)}
+    .macro-chip-label{font-size:.6rem;color:var(--text-muted);text-transform:uppercase}
+    .fav-btn{position:absolute;top:14px;right:14px;background:none;border:none;font-size:1.1rem;cursor:pointer;transition:transform .15s}
+    .fav-btn:hover{transform:scale(1.3)}
+    .recipe-card:hover .card-actions{opacity:1!important}
+    .shopping-list{background:var(--card);border:1.5px solid var(--border);border-radius:14px;overflow:hidden}
+    .shopping-header{background:var(--warm-bg);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
+    .shopping-header h3{font-family:'Playfair Display',serif;font-size:1.1rem;color:var(--text)}
+    .shopping-item{display:flex;align-items:center;gap:12px;padding:12px 24px;border-bottom:1px solid var(--border);transition:background .15s}
+    .shopping-item:last-child{border-bottom:none}
+    .shopping-item:hover{background:var(--warm-bg)}
+    .shopping-item input[type=checkbox]{accent-color:var(--accent);width:16px;height:16px;cursor:pointer}
+    .shopping-item-name{flex:1;font-size:.9rem;color:var(--text)}
+    .shopping-item-name.checked{text-decoration:line-through;color:var(--text-muted)}
+    .shopping-item-qty{font-size:.82rem;color:var(--text-muted);font-weight:700}
+    input[type=text],input[type=number],input[type=date],select,textarea{width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;background:var(--cream);font-family:'Lato',sans-serif;font-size:.88rem;color:var(--text);transition:border-color .15s;outline:none}
+    input:focus,select:focus,textarea:focus{border-color:var(--accent-light)}
+    .form-row{margin-bottom:14px}
+    .form-label{font-size:.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;display:block}
+    .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .btn{padding:10px 22px;border-radius:10px;border:none;font-family:'Lato',sans-serif;font-size:.87rem;font-weight:700;cursor:pointer;letter-spacing:.03em;transition:all .18s}
+    .btn-primary{background:var(--accent);color:white}
+    .btn-primary:hover{background:#a8501f;box-shadow:0 4px 14px rgba(196,98,45,.3)}
+    .btn-ghost{background:transparent;color:var(--text-muted);border:1.5px solid var(--border)}
+    .btn-ghost:hover{border-color:var(--accent-light);color:var(--accent)}
+    .btn-sm{padding:6px 14px;font-size:.8rem}
+    .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+    .filter-chip{padding:5px 14px;border-radius:20px;border:1.5px solid var(--border);background:var(--card);font-size:.78rem;font-weight:700;color:var(--text-muted);cursor:pointer;transition:all .15s;letter-spacing:.03em;text-transform:uppercase}
+    .filter-chip:hover,.filter-chip.active{background:var(--accent);color:white;border-color:var(--accent)}
+    .recipe-picker-list{max-height:350px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+    .recipe-picker-item{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:10px;border:1.5px solid var(--border);cursor:pointer;transition:all .15s;background:var(--cream)}
+    .recipe-picker-item:hover{border-color:var(--accent-light);background:#fff8f2}
+    .empty-state{text-align:center;padding:48px 24px;color:var(--text-muted)}
+    .empty-state div{font-size:2.5rem;margin-bottom:10px}
+    .scale-control{display:flex;align-items:center;gap:10px;margin-bottom:16px;background:var(--warm-bg);border-radius:10px;padding:10px 16px}
+    .scale-control label{font-size:.82rem;font-weight:700;color:var(--text-muted);white-space:nowrap}
+    .scale-control input{width:70px;flex:none}
+    .step-item{display:flex;gap:12px;margin-bottom:10px;font-size:.88rem;line-height:1.6;color:var(--text)}
+    .step-num{background:var(--accent);color:white;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;flex-shrink:0;margin-top:2px}
+    .targets-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px}
+    .target-card{background:var(--card);border:1.5px solid var(--border);border-radius:12px;padding:16px;text-align:center}
+    .target-card label{font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:8px}
+    .target-card input{text-align:center;font-size:1.1rem;font-weight:700;padding:6px}
+    .cravings-box{background:var(--card);border:1.5px solid var(--border);border-radius:14px;padding:24px;margin-bottom:28px}
+    .cravings-box h3{font-family:'Playfair Display',serif;font-size:1.1rem;margin-bottom:4px}
+    .cravings-hint{font-size:.78rem;color:var(--text-muted);margin-bottom:12px}
+    .craving-input-row{display:flex;gap:10px}
+    .craving-results{margin-top:16px;display:flex;flex-direction:column;gap:8px}
+    .craving-result-item{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:10px;background:var(--accent-muted);border:1.5px solid var(--accent-light)}
+    .craving-note{font-size:.8rem;color:var(--text-muted);margin-top:8px}
+    .craving-macro-badge{font-size:.7rem;font-weight:700;color:var(--text-muted);background:var(--warm-bg);border-radius:6px;padding:2px 7px}
+    .ingredient-row{display:grid;grid-template-columns:1fr 80px 80px 32px;gap:8px;align-items:center;margin-bottom:8px}
+    .ingredient-remove{background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1.1rem;transition:color .15s}
+    .ingredient-remove:hover{color:#991b1b}
+    .tag-pills{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+    .tag-pill{display:flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;background:#ede9fe;color:#5b21b6;font-size:.72rem;font-weight:700}
+    .tag-pill button{background:none;border:none;cursor:pointer;color:#5b21b6;font-size:.75rem;line-height:1;padding:0}
+    .nutri-estimate-banner{background:var(--green-light);border:1.5px solid #b5d4b0;border-radius:10px;padding:10px 14px;font-size:.82rem;color:var(--green);margin-bottom:14px}
+    .chart-card{background:var(--card);border:1.5px solid var(--border);border-radius:14px;padding:24px;margin-bottom:24px}
+    .chart-card h3{font-family:'Playfair Display',serif;font-size:1.1rem;color:var(--text);margin-bottom:4px}
+    .chart-card p{font-size:.82rem;color:var(--text-muted);margin-bottom:20px}
+    .date-range-row{display:flex;align-items:center;gap:12px;margin-bottom:24px;background:var(--card);border:1.5px solid var(--border);border-radius:12px;padding:14px 20px;flex-wrap:wrap}
+    .date-range-row label{font-size:.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+    .date-range-row input[type=date]{width:auto;min-width:140px}
+    .date-range-sep{color:var(--text-muted);font-size:.85rem;font-weight:700}
+    .no-data{text-align:center;padding:32px;color:var(--text-muted);font-size:.9rem}
+    .insight-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+    .insight-stat{background:var(--card);border:1.5px solid var(--border);border-radius:12px;padding:16px 18px;text-align:center}
+    .insight-stat-label{font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+    .insight-stat-val{font-size:1.4rem;font-weight:700}
+    .insight-stat-unit{font-size:.72rem;color:var(--text-muted);margin-top:3px}
+  `;
+
+  return (
+    <>
+      <style>{css}</style>
+      <div className="app">
+        <header className="header">
+          <div className="header-inner" style={{flexWrap:"wrap",gap:6}}>
+            <div className="logo" style={{flex:"1 1 auto"}}>Preppy <span>meal planner</span></div>
+            <div className="header-user" style={{display:"flex",alignItems:"center",gap:6,fontSize:".82rem",color:"var(--text-muted)",flexShrink:0}}>
+              <span>👤 <strong>{username}</strong></span>
+              <button className="btn btn-ghost btn-sm" onClick={()=>{setPinModalStep("menu");setPinModalInput("");setPinModalOldInput("");setPinModalError("");setPinModalOpen(true);}} style={{fontSize:".75rem",padding:"4px 10px"}} title="Manage PIN">{hasPin(username)?"🔒":"🔓"}</button>
+              <button className="btn btn-ghost btn-sm" onClick={onSwitchUser} style={{fontSize:".75rem",padding:"4px 10px"}}>Switch</button>
+            </div>
+            <nav className="nav" style={{width:"100%",borderTop:"1px solid var(--border)",paddingTop:6,marginTop:2}}>
+              {[["planner","📅 Planner"],["recipes","🍳 Recipes"],["shopping","🛒 Shopping"],["goals","🎯 Goals"],["insights","📊 Insights"]].map(([id,label])=>(
+                <button key={id} className={`nav-btn${tab===id?" active":""}`} onClick={()=>setTab(id)}>{label}</button>
+              ))}
+            </nav>
+          </div>
+        </header>
+
+        <main className="main">
+
+          {/* ── PLANNER ── */}
+          {tab==="planner"&&(
+            <div>
+              <h2 className="section-title">Weekly Meal Plan</h2>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:12}}>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setViewWeekOffset(o=>Math.max(0,o-1))} disabled={viewWeekOffset===0} style={{opacity:viewWeekOffset===0?0.4:1}}>← Prev</button>
+                  <span style={{fontFamily:"'Playfair Display',serif",fontSize:"1rem",color:"var(--text)",minWidth:200,textAlign:"center"}}>
+                    {viewWeekOffset===0?"This week":"Week of "}{viewWeekOffset!==0&&fmtDate(viewWeekMonday)}
+                    {viewWeekOffset===0&&<span style={{fontStyle:"italic",color:"var(--text-muted)"}}> ({fmtDate(viewWeekMonday)})</span>}
+                  </span>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setViewWeekOffset(o=>Math.min(3,o+1))} disabled={viewWeekOffset===3} style={{opacity:viewWeekOffset===3?0.4:1}}>Next →</button>
+                  {viewWeekOffset!==0&&<button className="btn btn-ghost btn-sm" onClick={()=>setViewWeekOffset(0)}>Back to this week</button>}
+                </div>
+                <div className="today-badge" style={{fontSize:".72rem"}}>📅 Today: {todayDayName}, {today.toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})}</div>
+              </div>
+              <div className="planner-grid-wrap"><div className="planner-grid">
+                <div className="planner-header-cell corner"/>
+                {DAYS.map(d=>(
+                  <div key={d} className={`planner-header-cell${d===todayDayName&&viewWeekOffset===0?" today-col":""}`}>{d.slice(0,3)}{d===todayDayName&&viewWeekOffset===0?" ✦":""}</div>
+                ))}
+                {MEAL_TYPES.map(meal=>(
+                  <>
+                    <div key={meal+"-lbl"} className="meal-label">{meal}</div>
+                    {DAYS.map(day=>{
+                      const cr=getRecipesForCell(day,meal);
+                      const isToday=day===todayDayName;
+                      return (
+                        <div key={day+meal} className={`planner-cell${cr.length?" has-meal":""}${isToday&&viewWeekOffset===0?" today-cell":""}`}>
+                          {cr.length?(
+                            <div style={{display:"flex",flexDirection:"column",gap:4,height:"100%"}}>
+                              {cr.map(recipe=>(
+                                <div key={recipe.id} style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",background:"rgba(196,98,45,.07)",borderRadius:6,padding:"3px 6px"}}>
+                                  <div><div className="cell-meal-name">{recipe.name}</div><div className="cell-meal-cal">{recipe.calories} kcal</div></div>
+                                  <button style={{background:"none",border:"none",cursor:"pointer",color:"var(--text-muted)",fontSize:".7rem",padding:"0 0 0 4px",lineHeight:1,marginTop:2}} onClick={()=>removeRecipeFromCell(day,meal,recipe.id)}>✕</button>
+                                </div>
+                              ))}
+                              <button onClick={()=>setPickerOpen({day,meal})}
+                                style={{background:"none",border:"1.5px dashed var(--border)",borderRadius:6,color:"var(--text-muted)",fontSize:".7rem",padding:"2px",cursor:"pointer",marginTop:2}}
+                                onMouseOver={e=>e.currentTarget.style.borderColor="var(--accent-light)"}
+                                onMouseOut={e=>e.currentTarget.style.borderColor="var(--border)"}>+ add</button>
+                            </div>
+                          ):(
+                            <div className="cell-add" onClick={()=>setPickerOpen({day,meal})}>+</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </>
+                ))}
+              </div>
+
+              {/* Cravings */}
+              <div className="cravings-box">
+                <h3>🤔 What are you craving?</h3>
+                <p className="cravings-hint">Try: "high protein", "low calorie", "Japanese", "easy", "vegan", "high fibre"...</p>
+                <div className="craving-input-row">
+                  <input type="text" placeholder="Describe what you feel like eating..." value={cravingInput}
+                    onChange={e=>setCravingInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleCravingSearch()} />
+                  <button className="btn btn-primary" onClick={handleCravingSearch}>Find</button>
+                </div>
+                {cravingResults!==null&&(
+                  <div className="craving-results">
+                    {/* Explain what logic was used */}
+                    {cravingResults.macroRule&&(
+                      <div style={{fontSize:".8rem",color:"var(--text-muted)",marginTop:8,marginBottom:4,display:"flex",alignItems:"center",gap:6}}>
+                        <span>🔍 Filtering by <strong>{cravingResults.macroRule.dir==="high"?"highest":"lowest"} {cravingResults.macroRule.macro}</strong> relative to your daily target ({targetsNum[cravingResults.macroRule.macro]}{cravingResults.macroRule.macro==="calories"?"kcal":"g"}/day)</span>
+                      </div>
+                    )}
+                    {cravingResults.results.length===0
+                      ?<p className="craving-note">No matches found. Try adjusting your search or adding more recipes!</p>
+                      :cravingResults.results.map(r=>{
+                        const macroKey=cravingResults.macroRule?.macro;
+                        const macroVal=macroKey?r[macroKey]:null;
+                        const targetVal=macroKey?targetsNum[macroKey]:null;
+                        const pctOfTarget=targetVal?Math.round((macroVal/targetVal)*100):null;
+                        return (
+                          <div key={r.id} className="craving-result-item">
+                            <div>
+                              <span style={{fontWeight:700,color:"var(--accent)",fontSize:".9rem"}}>{r.name}</span>
+                              {pctOfTarget!==null&&<div style={{fontSize:".72rem",color:"var(--text-muted)",marginTop:2}}>{macroVal}{macroKey==="calories"?"kcal":"g"} {macroKey} — {pctOfTarget}% of your daily target</div>}
+                            </div>
+                            <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                              <span className="tag tag-cuisine">{r.cuisine}</span>
+                              <button className="btn btn-sm btn-primary" onClick={()=>{setRecipeDetailOpen(r);setCravingResults(null);setCravingInput("");}}>View</button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    }
+                  </div>
+                )}
+              </div>
+            </div></div>
+          )}
+
+          {/* ── RECIPES ── */}
+          {tab==="recipes"&&(
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                <div><h2 className="section-title">Recipe Repository</h2><p className="section-sub">Your personal cookbook. {recipes.length} recipes saved.</p></div>
+<div style={{display:"flex",gap:10,alignItems:"center"}}>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setTagManagerOpen(true)} style={{fontSize:".78rem"}}>🏷 Manage Tags</button>
+                  <button className="btn btn-primary" onClick={()=>setAddRecipeOpen(true)}>+ Add Recipe</button>
+                </div>
+              </div>
+              <div className="filters">
+                <button className={`filter-chip${filterFav?" active":""}`} onClick={()=>setFilterFav(f=>!f)}>❤️ Favourites</button>
+                <button className={`filter-chip${filterCuisine==="All"?" active":""}`} onClick={()=>setFilterCuisine("All")}>All Cuisines</button>
+                {CUISINES.map(c=><button key={c} className={`filter-chip${filterCuisine===c?" active":""}`} onClick={()=>setFilterCuisine(c)}>{c}</button>)}
+              </div>
+              <div className="filters">
+                {["All",...DIFFICULTIES].map(d=><button key={d} className={`filter-chip${filterDiff===d?" active":""}`} onClick={()=>setFilterDiff(d)}>{d}</button>)}
+              </div>
+              {filteredRecipes.length===0?<div className="empty-state"><div>🍽️</div><p>No recipes match your filters.</p></div>:
+                <div className="recipes-grid">
+                  {filteredRecipes.map(r=>(
+                    <div key={r.id} className="recipe-card" onClick={()=>setRecipeDetailOpen(r)}>
+                      <button className="fav-btn" onClick={e=>{e.stopPropagation();toggleFav(r.id);}}>{r.favourite?"❤️":"🤍"}</button>
+                      <div className="recipe-card-name">{r.name}</div>
+                      <div className="recipe-tags">
+                        <span className="tag tag-cuisine">{r.cuisine}</span>
+                        <span className={`tag tag-${r.difficulty.toLowerCase()}`}>{r.difficulty}</span>
+                        {r.favourite&&<span className="tag tag-fav">Fav</span>}
+                        {(r.tags||[]).map(t=><span key={t} className="tag tag-custom">{t}</span>)}
+                      </div>
+                      <div className="recipe-macros">
+                        {[["kcal",r.calories],["protein",r.protein+"g"],["fats",r.fats+"g"],["fibre",r.fibre+"g"]].map(([lbl,val])=>(
+                          <div className="macro-chip" key={lbl}><div className="macro-chip-val">{val}</div><div className="macro-chip-label">{lbl}</div></div>
+                        ))}
+                      </div>
+                      <div style={{position:"absolute",bottom:12,right:12,display:"flex",gap:6,opacity:0}} className="card-actions"><button style={{background:"none",border:"1.5px solid var(--border)",borderRadius:8,padding:"4px 10px",fontSize:".72rem",fontWeight:700,color:"var(--text-muted)",cursor:"pointer",fontFamily:"'Lato',sans-serif",transition:"all .15s"}} onClick={e=>{e.stopPropagation();setEditRecipeTarget({...r,tagInput:""});}} onMouseOver={e=>{e.currentTarget.style.borderColor="var(--accent)";e.currentTarget.style.color="var(--accent)";e.currentTarget.style.background="var(--accent-muted)";}} onMouseOut={e=>{e.currentTarget.style.borderColor="var(--border)";e.currentTarget.style.color="var(--text-muted)";e.currentTarget.style.background="none";}}>✏️ Edit</button><button style={{background:"none",border:"1.5px solid var(--border)",borderRadius:8,padding:"4px 10px",fontSize:".72rem",fontWeight:700,color:"var(--text-muted)",cursor:"pointer",fontFamily:"'Lato',sans-serif",transition:"all .15s"}} onClick={e=>confirmDelete(r,e)} onMouseOver={e=>{e.currentTarget.style.borderColor="#991b1b";e.currentTarget.style.color="#991b1b";e.currentTarget.style.background="#fee2e2";}} onMouseOut={e=>{e.currentTarget.style.borderColor="var(--border)";e.currentTarget.style.color="var(--text-muted)";e.currentTarget.style.background="none";}}>🗑 Delete</button></div>
+                    </div>
+                  ))}
+                </div>
+              }
+            </div>
+          )}
+
+          {/* ── SHOPPING ── */}
+          {tab==="shopping"&&(
+            <div>
+              <h2 className="section-title">Shopping List</h2>
+              <p className="section-sub">Auto-generated from your weekly meal plan.</p>
+              {shoppingList.length===0?<div className="empty-state"><div>🛒</div><p>Add meals to your planner and your shopping list will appear here.</p></div>:
+                <div className="shopping-list">
+                  <div className="shopping-header">
+                    <h3>This week — {shoppingList.length} items</h3>
+                    <button className="btn btn-ghost btn-sm" onClick={()=>setCheckedItems({})}>Clear checks</button>
+                  </div>
+                  {shoppingList.map((item,i)=>(
+                    <div key={i} className="shopping-item">
+                      <input type="checkbox" checked={!!checkedItems[item.item]} onChange={()=>setCheckedItems(c=>({...c,[item.item]:!c[item.item]}))} />
+                      <span className={`shopping-item-name${checkedItems[item.item]?" checked":""}`}>{item.item}</span>
+                      <span className="shopping-item-qty">{item.qty} {item.unit}</span>
+                    </div>
+                  ))}
+                </div>
+              }
+            </div>
+          )}
+
+          {/* ── GOALS ── */}
+          {tab==="goals"&&(
+            <div>
+              <h2 className="section-title">Daily Nutrition Targets</h2>
+              <p className="section-sub">Set your daily goals — then check each day's progress below.</p>
+              <div className="targets-grid">
+                {[["calories","🔥 Calories","kcal"],["protein","💪 Protein","g/day"],["fats","🥑 Fats","g/day"],["fibre","🌿 Fibre","g/day"]].map(([key,label,unit])=>(
+                  <div className="target-card" key={key}>
+                    <label>{label}<br/><span style={{fontWeight:300}}>{unit}</span></label>
+                    <input type="number" placeholder="0" value={targets[key]}
+                      onChange={e=>setTargets(t=>({...t,[key]:e.target.value}))}
+                      onFocus={e=>{if(e.target.value==="0")setTargets(t=>({...t,[key]:""}));}}
+                      min={0}/>
+                  </div>
+                ))}
+              </div>
+              {/* Week navigator */}
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,background:"var(--card)",border:"1.5px solid var(--border)",borderRadius:12,padding:"10px 16px"}}>
+                <button className="btn btn-ghost btn-sm" onClick={()=>setGoalsWeekOffset(o=>Math.max(0,o-1))} disabled={goalsWeekOffset===0}>← Prev</button>
+                <span style={{flex:1,textAlign:"center",fontSize:".88rem",fontWeight:700,color:"var(--text-main)"}}>
+                  {goalsWeekOffset===0?"This week":goalsWeekOffset===1?"Next week":`In ${goalsWeekOffset} weeks`}
+                  <span style={{fontWeight:300,color:"var(--text-muted)",marginLeft:8,fontSize:".8rem"}}>{goalsWeekLabel}</span>
+                </span>
+                <button className="btn btn-ghost btn-sm" onClick={()=>setGoalsWeekOffset(o=>Math.min(3,o+1))} disabled={goalsWeekOffset===3}>Next →</button>
+              </div>
+              <div style={{display:"flex",gap:6,marginBottom:20,flexWrap:"wrap"}}>
+                {DAYS.map((day,i)=>{
+                  const dayDate = addDays(goalsWeekMonday,i);
+                  const isToday = toDateStr(dayDate)===toDateStr(today);
+                  return (
+                    <button key={day} className={`filter-chip${selectedGoalDay===day?" active":""}`} onClick={()=>setSelectedGoalDay(day)}>
+                      {day.slice(0,3)} <span style={{fontWeight:300,fontSize:".75em"}}>{fmtDate(dayDate)}</span>{isToday?" ✦":""}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{background:"var(--card)",border:"1.5px solid var(--border)",borderRadius:14,padding:24}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+                  <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:"1.1rem"}}>{selectedGoalDay}</h3>
+                  {toDateStr(addDays(goalsWeekMonday,DAYS.indexOf(selectedGoalDay)))===toDateStr(today)&&<span className="today-badge" style={{fontSize:".65rem",padding:"2px 8px"}}>Today</span>}
+                </div>
+                <p style={{fontSize:".82rem",color:"var(--text-muted)",marginBottom:20}}>Daily progress vs your targets</p>
+                {(()=>{
+                  const dn=getDayNutrition(selectedGoalDay);
+                  return ["calories","protein","fats","fibre"].map(k=>{
+                    const target=targetsNum[k]||0;
+                    const pct=target>0?Math.min(100,Math.round((dn[k]/target)*100)):0;
+                    const unit=k==="calories"?"kcal":"g";
+                    const over=target>0&&dn[k]>target;
+                    return (
+                      <div key={k} style={{marginBottom:18}}>
+                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                          <span style={{fontSize:".82rem",fontWeight:700,textTransform:"uppercase",letterSpacing:".04em",color:"var(--text-muted)"}}>{k}</span>
+                          <span style={{fontSize:".82rem",fontWeight:700,color:over?"#991b1b":getNutriColor(k)}}>{dn[k]}{unit} / {target}{unit} {over?"⚠️":`(${pct}%)`}</span>
+                        </div>
+                        <div style={{height:10,background:"var(--border)",borderRadius:10,overflow:"hidden"}}>
+                          <div style={{height:"100%",width:`${pct}%`,background:over?"#f87171":getNutriColor(k),borderRadius:10,transition:"width 0.4s ease"}}/>
+                        </div>
+                        <div style={{fontSize:".72rem",color:"var(--text-muted)",marginTop:4}}>
+                          {target>0?(dn[k]<target?`${target-dn[k]}${unit} remaining`:`Exceeded by ${dn[k]-target}${unit}`):"No target set"}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* ── INSIGHTS ── */}
+          {tab==="insights"&&(
+            <div>
+              <h2 className="section-title">Nutrition Insights</h2>
+              <p className="section-sub">Historical weekly averages. "This week" reflects your live planner data.</p>
+
+              {/* Date range picker */}
+              <div className="date-range-row">
+                <label>Viewing:</label>
+                <input type="date" value={insightStart} onChange={e=>setInsightStart(e.target.value)} max={insightEnd||toDateStr(today)} />
+                <span className="date-range-sep">→</span>
+                <input type="date" value={insightEnd} onChange={e=>setInsightEnd(e.target.value)} min={insightStart} max={toDateStr(today)} />
+                <div style={{display:"flex",gap:8,marginLeft:"auto",flexWrap:"wrap"}}>
+                  {[["4w","Last 4 weeks",28],["8w","Last 8 weeks",56],["3m","Last 3 months",90]].map(([id,label,days])=>(
+                    <button key={id} className="btn btn-ghost btn-sm" onClick={()=>{setInsightEnd(toDateStr(today));setInsightStart(toDateStr(addDays(today,-days)));}}>{label}</button>
+                  ))}
+                  <button className="btn btn-ghost btn-sm" onClick={()=>{setInsightStart("");setInsightEnd("");}}>All time</button>
+                </div>
+              </div>
+
+              {(()=>{
+                const hasAnyData = allChartData.some(w=>w.meals>0||w.calories>0);
+                if (!hasAnyData) return (
+                  <div style={{background:"var(--card)",border:"1.5px solid var(--border)",borderRadius:14,padding:"48px 32px",textAlign:"center"}}>
+                    <div style={{fontSize:"2.5rem",marginBottom:12}}>📊</div>
+                    <div style={{fontFamily:"'Playfair Display',serif",fontSize:"1.2rem",color:"var(--text)",marginBottom:8}}>Your insights are brewing!</div>
+                    <p style={{color:"var(--text-muted)",fontSize:".9rem",maxWidth:380,margin:"0 auto"}}>Start planning meals in the Planner tab and your nutrition trends will appear here over time. Come back after your first week!</p>
+                  </div>
+                );
+                if (filteredChartData.length===0) return <div className="no-data">No data in this date range. Try widening your selection.</div>;
+                return <>
+                  {/* Chart 1: Nutrition */}
+                  <div className="chart-card">
+                    <h3>Average Daily Nutrition</h3>
+                    <p>Weekly average per day. Select a macro to focus. Dashed line = your daily target.</p>
+                    <div style={{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}}>
+                      {[["calories","🔥 Calories"],["protein","💪 Protein"],["fats","🥑 Fats"],["fibre","🌿 Fibre"]].map(([k,lbl])=>(
+                        <button key={k} className={`filter-chip${chartMetric===k?" active":""}`} onClick={()=>setChartMetric(k)}>{lbl}</button>
+                      ))}
+                    </div>
+                    <LineChartCanvas data={filteredChartData} dataKey={chartMetric} color={getNutriColor(chartMetric)} target={targetsNum[chartMetric]} unit={chartMetric==="calories"?"kcal":"g"} height={260}/>
+                  </div>
+
+                  {/* Chart 2: Meals prepped */}
+                  <div className="chart-card">
+                    <h3>Average Meals Prepped Per Day</h3>
+                    <p>How many meal slots you fill on average each day, by week. "This week" updates live.</p>
+                    <BarChartCanvas data={filteredChartData} height={240}/>
+                  </div>
+
+                  {/* Summary stats */}
+                  <div className="insight-summary">
+                    {[["Avg Calories",Math.round(filteredChartData.reduce((s,w)=>s+w.calories,0)/filteredChartData.length),"kcal/day","#c4622d"],
+                      ["Avg Protein",Math.round(filteredChartData.reduce((s,w)=>s+w.protein,0)/filteredChartData.length),"g/day","#5a7a52"],
+                      ["Avg Fats",Math.round(filteredChartData.reduce((s,w)=>s+w.fats,0)/filteredChartData.length),"g/day","#d4a017"],
+                      ["Avg Meals",parseFloat((filteredChartData.reduce((s,w)=>s+w.meals,0)/filteredChartData.length).toFixed(1)),"per day","#7c6b9e"],
+                    ].map(([lbl,val,unit,color])=>(
+                      <div key={lbl} className="insight-stat">
+                        <div className="insight-stat-label">{lbl}</div>
+                        <div className="insight-stat-val" style={{color}}>{val}</div>
+                        <div className="insight-stat-unit">{unit}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              })()}
+            </div>
+          )}
+        </main>
+
+        {/* ── RECIPE PICKER MODAL ── */}
+        {pickerOpen&&(
+          <div className="modal-overlay" onClick={()=>setPickerOpen(null)}>
+            <div className="modal" onClick={e=>e.stopPropagation()}>
+              <button className="modal-close" onClick={()=>setPickerOpen(null)}>✕</button>
+              <h2>Add recipes to {pickerOpen.day} {pickerOpen.meal}</h2>
+              <p style={{fontSize:".82rem",color:"var(--text-muted)",marginBottom:16}}>Select one or more — tap again to deselect.</p>
+              <div className="recipe-picker-list">
+                {recipes.map(r=>{
+                  const sel=(planner[getPlannerKey(pickerOpen.day,pickerOpen.meal)]||[]).includes(r.id);
+                  return (
+                    <div key={r.id} className="recipe-picker-item" onClick={()=>toggleRecipeInCell(r.id)} style={sel?{borderColor:"var(--accent)",background:"var(--accent-muted)"}:{}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <div style={{width:20,height:20,borderRadius:6,border:`2px solid ${sel?"var(--accent)":"var(--border)"}`,background:sel?"var(--accent)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .15s"}}>
+                          {sel&&<span style={{color:"white",fontSize:".7rem",fontWeight:700}}>✓</span>}
+                        </div>
+                        <div>
+                          <div style={{fontWeight:700,fontSize:".9rem",marginBottom:3}}>{r.name}</div>
+                          <div style={{display:"flex",gap:6}}><span className="tag tag-cuisine">{r.cuisine}</span><span className={`tag tag-${r.difficulty.toLowerCase()}`}>{r.difficulty}</span></div>
+                        </div>
+                      </div>
+                      <span style={{fontSize:".82rem",color:"var(--text-muted)",fontWeight:700}}>{r.calories} kcal</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{marginTop:16,display:"flex",justifyContent:"flex-end"}}>
+                <button className="btn btn-primary" onClick={()=>setPickerOpen(null)}>Done</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── RECIPE DETAIL MODAL ── */}
+        {recipeDetailOpen&&(
+          <div className="modal-overlay" onClick={()=>setRecipeDetailOpen(null)}>
+            <div className="modal" onClick={e=>e.stopPropagation()}>
+              <button className="modal-close" onClick={()=>setRecipeDetailOpen(null)}>✕</button>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                <h2 style={{marginBottom:0}}>{recipeDetailOpen.name}</h2>
+<div style={{display:"flex",gap:8}}><button className="btn btn-ghost btn-sm" style={{marginTop:2}} onClick={()=>{setEditRecipeTarget({...recipeDetailOpen,tagInput:""});setRecipeDetailOpen(null);}}>✏️ Edit</button><button className="btn btn-ghost btn-sm" style={{marginTop:2,borderColor:"#fca5a5",color:"#991b1b"}} onClick={e=>confirmDelete(recipeDetailOpen,e)}>🗑 Delete</button></div>
+              </div>
+              <div className="recipe-tags" style={{marginBottom:16}}>
+                <span className="tag tag-cuisine">{recipeDetailOpen.cuisine}</span>
+                <span className={`tag tag-${recipeDetailOpen.difficulty.toLowerCase()}`}>{recipeDetailOpen.difficulty}</span>
+                {recipeDetailOpen.favourite&&<span className="tag tag-fav">❤️ Fav</span>}
+                {(recipeDetailOpen.tags||[]).map(t=><span key={t} className="tag tag-custom">{t}</span>)}
+              </div>
+              <div className="scale-control">
+                <label>Scale for servings:</label>
+                <input type="number" value={scaleServings} min={0.5} step={0.5} onChange={e=>setScaleServings(Number(e.target.value))}/>
+              </div>
+              <div style={{marginBottom:20}}>
+                <div className="form-label" style={{marginBottom:10}}>Ingredients</div>
+                {recipeDetailOpen.ingredients.map((ing,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid var(--border)",fontSize:".88rem"}}>
+                    <span>{ing.item}</span>
+                    <span style={{fontWeight:700,color:"var(--accent)"}}>{(ing.qty*scaleServings).toFixed(ing.qty*scaleServings%1===0?0:1)} {ing.unit}</span>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <div className="form-label" style={{marginBottom:10}}>Steps</div>
+                {recipeDetailOpen.steps.map((step,i)=>(
+                  <div key={i} className="step-item"><span className="step-num">{i+1}</span><span>{step}</span></div>
+                ))}
+              </div>
+              <div className="recipe-macros" style={{marginTop:20}}>
+                {[["kcal",recipeDetailOpen.calories],["protein",recipeDetailOpen.protein+"g"],["fats",recipeDetailOpen.fats+"g"],["fibre",recipeDetailOpen.fibre+"g"]].map(([lbl,val])=>(
+                  <div className="macro-chip" key={lbl}><div className="macro-chip-val">{val}</div><div className="macro-chip-label">{lbl}</div></div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {addRecipeOpen&&(
+          <div className="modal-overlay" onClick={()=>setAddRecipeOpen(false)}>
+            <RecipeForm initial={EMPTY_RECIPE} title="Add New Recipe" onSave={saveRecipe} onCancel={()=>setAddRecipeOpen(false)}/>
+          </div>
+        )}
+        {editRecipeTarget&&(
+          <div className="modal-overlay" onClick={()=>setEditRecipeTarget(null)}>
+            <RecipeForm initial={editRecipeTarget} title={`Edit — ${editRecipeTarget.name}`} onSave={updateRecipe} onCancel={()=>setEditRecipeTarget(null)}/>
+          </div>
+        )}
+
+        {/* ── TAG MANAGER MODAL ── */}
+        {tagManagerOpen&&(
+          <div className="modal-overlay" onClick={()=>{setTagManagerOpen(false);setTagEditId(null);}}>
+            <div className="modal" style={{maxWidth:480}} onClick={e=>e.stopPropagation()}>
+              <button className="modal-close" onClick={()=>{setTagManagerOpen(false);setTagEditId(null);}}>✕</button>
+              <h2>🏷 Tag Manager</h2>
+              <p style={{fontSize:".85rem",color:"var(--text-muted)",marginBottom:20}}>Rename or remove tags across all recipes at once.</p>
+              {allTags.length===0
+                ?<div style={{textAlign:"center",padding:"32px 0",color:"var(--text-muted)"}}>
+                    <div style={{fontSize:"2rem",marginBottom:8}}>🏷️</div>
+                    <p>No custom tags yet. Add tags to recipes to manage them here.</p>
+                  </div>
+                :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:360,overflowY:"auto"}}>
+                  {allTags.map(tag=>{
+                    const count=recipes.filter(r=>(r.tags||[]).includes(tag)).length;
+                    const isEditing=tagEditId===tag;
+                    return (
+                      <div key={tag} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"var(--warm-bg)",borderRadius:10,border:"1.5px solid var(--border)"}}>
+                        <span className="tag tag-custom" style={{flexShrink:0}}>{tag}</span>
+                        <span style={{fontSize:".75rem",color:"var(--text-muted)",flex:1}}>{count} recipe{count!==1?"s":""}</span>
+                        {isEditing
+                          ?<>
+                            <input type="text" value={tagEditVal} onChange={e=>setTagEditVal(e.target.value)}
+                              onKeyDown={e=>{if(e.key==="Enter")renameTag(tag,tagEditVal);if(e.key==="Escape"){setTagEditId(null);setTagEditVal("");}}}
+                              style={{width:140,padding:"5px 10px",fontSize:".82rem"}} autoFocus/>
+                            <button className="btn btn-primary btn-sm" onClick={()=>renameTag(tag,tagEditVal)}>Save</button>
+                            <button className="btn btn-ghost btn-sm" onClick={()=>{setTagEditId(null);setTagEditVal("");}}>✕</button>
+                          </>
+                          :<>
+                            <button className="btn btn-ghost btn-sm" onClick={()=>{setTagEditId(tag);setTagEditVal(tag);}}>✏️ Rename</button>
+                            <button className="btn btn-ghost btn-sm" style={{borderColor:"#fca5a5",color:"#991b1b"}}
+                              onClick={()=>deleteTag(tag)}>🗑</button>
+                          </>
+                        }
+                      </div>
+                    );
+                  })}
+                </div>
+              }
+              <div style={{marginTop:20,paddingTop:16,borderTop:"1px solid var(--border)"}}>
+                <p style={{fontSize:".75rem",fontWeight:700,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:8}}>Note</p>
+                <p style={{fontSize:".8rem",color:"var(--text-muted)"}}>Renaming a tag updates it across every recipe. Deleting a tag removes it from all recipes permanently.</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── PIN MANAGEMENT MODAL ── */}
+        {pinModalOpen&&(
+          <div className="modal-overlay" onClick={()=>setPinModalOpen(false)}>
+            <div className="modal" style={{maxWidth:380,textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+              <button className="modal-close" onClick={()=>setPinModalOpen(false)}>✕</button>
+              {pinModalStep==="menu"&&(
+                <>
+                  <div style={{fontSize:"1.6rem",marginBottom:8}}>{hasPin(username)?"🔒":"🔓"}</div>
+                  <h2 style={{marginBottom:4}}>PIN Protection</h2>
+                  <p style={{fontSize:".85rem",color:"var(--text-muted)",marginBottom:24}}>{hasPin(username)?"Your profile is protected by a PIN.":"Your profile has no PIN — anyone can access it."}</p>
+                  {hasPin(username) ? (
+                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                      <button className="btn btn-ghost" onClick={()=>{setPinModalStep("change_old");setPinModalInput("");setPinModalOldInput("");setPinModalError("");}}>🔑 Change PIN</button>
+                      <button className="btn btn-ghost" style={{borderColor:"#fca5a5",color:"#991b1b"}} onClick={()=>{setPinModalStep("remove_confirm");setPinModalInput("");setPinModalError("");}}>🗑 Remove PIN</button>
+                    </div>
+                  ) : (
+                    <button className="btn btn-primary" onClick={()=>{setPinModalStep("set");setPinModalInput("");setPinModalError("");}}>Set a PIN</button>
+                  )}
+                </>
+              )}
+              {(pinModalStep==="set"||pinModalStep==="change_new")&&(
+                <>
+                  <div style={{fontSize:"1.6rem",marginBottom:8}}>🔒</div>
+                  <h2 style={{marginBottom:4}}>{pinModalStep==="set"?"Set a PIN":"New PIN"}</h2>
+                  <p style={{fontSize:".85rem",color:"var(--text-muted)",marginBottom:20}}>Enter a 4-digit PIN for your profile.</p>
+                  <input type="password" inputMode="numeric" maxLength={4} placeholder="4-digit PIN" autoFocus
+                    value={pinModalInput} onChange={e=>setPinModalInput(e.target.value.replace(/[^0-9]/g,"").slice(0,4))}
+                    style={{textAlign:"center",fontSize:"1.5rem",letterSpacing:".3em",marginBottom:8}} />
+                  {pinModalError&&<p style={{color:"#dc2626",fontSize:".8rem",marginBottom:8}}>{pinModalError}</p>}
+                  <div style={{display:"flex",gap:8,marginTop:8}}>
+                    <button className="btn btn-ghost" onClick={()=>setPinModalStep("menu")}>← Back</button>
+                    <button className="btn btn-primary" style={{flex:1}} disabled={pinModalInput.length!==4} onClick={()=>{
+                      if(pinModalInput.length!==4){setPinModalError("PIN must be 4 digits");return;}
+                      setUserPin(username,pinModalInput);setPinModalOpen(false);
+                    }}>Save PIN</button>
+                  </div>
+                </>
+              )}
+              {pinModalStep==="change_old"&&(
+                <>
+                  <div style={{fontSize:"1.6rem",marginBottom:8}}>🔑</div>
+                  <h2 style={{marginBottom:4}}>Change PIN</h2>
+                  <p style={{fontSize:".85rem",color:"var(--text-muted)",marginBottom:20}}>Enter your current PIN first.</p>
+                  <input type="password" inputMode="numeric" maxLength={4} placeholder="Current PIN" autoFocus
+                    value={pinModalOldInput} onChange={e=>setPinModalOldInput(e.target.value.replace(/[^0-9]/g,"").slice(0,4))}
+                    style={{textAlign:"center",fontSize:"1.5rem",letterSpacing:".3em",marginBottom:8}} />
+                  {pinModalError&&<p style={{color:"#dc2626",fontSize:".8rem",marginBottom:8}}>{pinModalError}</p>}
+                  <div style={{display:"flex",gap:8,marginTop:8}}>
+                    <button className="btn btn-ghost" onClick={()=>setPinModalStep("menu")}>← Back</button>
+                    <button className="btn btn-primary" style={{flex:1}} disabled={pinModalOldInput.length!==4} onClick={()=>{
+                      if(pinModalOldInput!==getUserPin(username)){setPinModalError("Incorrect PIN");setPinModalOldInput("");return;}
+                      setPinModalStep("change_new");setPinModalInput("");setPinModalError("");
+                    }}>Next →</button>
+                  </div>
+                </>
+              )}
+              {pinModalStep==="remove_confirm"&&(
+                <>
+                  <div style={{fontSize:"1.6rem",marginBottom:8}}>🔓</div>
+                  <h2 style={{marginBottom:4}}>Remove PIN?</h2>
+                  <p style={{fontSize:".85rem",color:"var(--text-muted)",marginBottom:20}}>Your profile will be accessible without a PIN.</p>
+                  <input type="password" inputMode="numeric" maxLength={4} placeholder="Confirm current PIN" autoFocus
+                    value={pinModalInput} onChange={e=>setPinModalInput(e.target.value.replace(/[^0-9]/g,"").slice(0,4))}
+                    style={{textAlign:"center",fontSize:"1.5rem",letterSpacing:".3em",marginBottom:8}} />
+                  {pinModalError&&<p style={{color:"#dc2626",fontSize:".8rem",marginBottom:8}}>{pinModalError}</p>}
+                  <div style={{display:"flex",gap:8,marginTop:8}}>
+                    <button className="btn btn-ghost" onClick={()=>setPinModalStep("menu")}>← Back</button>
+                    <button className="btn btn-primary" style={{flex:1,background:"#dc2626"}} disabled={pinModalInput.length!==4} onClick={()=>{
+                      if(pinModalInput!==getUserPin(username)){setPinModalError("Incorrect PIN");setPinModalInput("");return;}
+                      setUserPin(username,null);setPinModalOpen(false);
+                    }}>Remove PIN</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── DELETE CONFIRM MODAL ── */}
+        {deleteConfirmTarget&&(
+          <div className="modal-overlay" onClick={()=>setDeleteConfirmTarget(null)}>
+            <div className="modal" style={{maxWidth:420,textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+              <div style={{fontSize:"2rem",marginBottom:12}}>🗑️</div>
+              <h2 style={{marginBottom:8}}>Delete this recipe?</h2>
+              <p style={{fontSize:".9rem",color:"var(--text-muted)",marginBottom:8}}><strong style={{color:"var(--text)"}}>{deleteConfirmTarget.name}</strong></p>
+              <p style={{fontSize:".85rem",color:"#991b1b",background:"#fee2e2",borderRadius:10,padding:"10px 14px",marginBottom:24}}>⚠️ This cannot be undone. Once deleted, this recipe is gone for good.</p>
+              <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+                <button className="btn btn-ghost" onClick={()=>setDeleteConfirmTarget(null)}>Cancel, keep it</button>
+                <button className="btn btn-primary" style={{background:"#dc2626"}} onClick={executeDelete}>Yes, delete it</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ── Root — shows UserGate then MealPrepPlanner ──────────────────────────────
+function App() {
+  const [username, setUsername] = useState(()=>lsRaw(LS_ACTIVE_USER, null));
+  return username
+    ? <MealPrepPlanner username={username} onSwitchUser={()=>{ lsRawSet(LS_ACTIVE_USER,null); setUsername(null); }}/>
+    : <UserGate onEnter={name=>setUsername(name)}/>;
+}
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
